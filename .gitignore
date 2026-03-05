@@ -1,4 +1,5 @@
 node_modules
 cdk.out
 .env
+.kiro
 cdk-outputs.json
