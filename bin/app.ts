@@ -17,12 +17,16 @@ const keyPairName = process.env.KEY_PAIR_NAME;
 const securityGroupId = process.env.SECURITY_GROUP_ID;
 const sqlPluginRepo = process.env.SQL_PLUGIN_REPO || "https://github.com/bharath-techie/sql.git";
 const sqlPluginBranch = process.env.SQL_PLUGIN_BRANCH || "substrait-plan";
+const stackSuffix = process.env.STACK_SUFFIX || "";
+const stackName = stackSuffix
+  ? `OpenSearchCodeGuruStack-${stackSuffix}`
+  : "OpenSearchCodeGuruStack";
 
 if (!vpcId || !subnetId || !subnetAz || !keyPairName || !securityGroupId) {
   throw new Error("VPC_ID, SUBNET_ID, SUBNET_AZ, SECURITY_GROUP_ID, and KEY_PAIR_NAME must be set in .env");
 }
 
-new OpenSearchCodeGuruStack(app, "OpenSearchCodeGuruStack", {
+new OpenSearchCodeGuruStack(app, stackName, {
   env: { account, region },
   branch,
   vpcId,
