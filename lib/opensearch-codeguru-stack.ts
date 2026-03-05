@@ -15,20 +15,23 @@ interface OpenSearchCodeGuruStackProps extends cdk.StackProps {
   keyPairName: string;
   sqlPluginRepo: string;
   sqlPluginBranch: string;
+  stackSuffix: string;
 }
 
 export class OpenSearchCodeGuruStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: OpenSearchCodeGuruStackProps) {
     super(scope, id, props);
 
-    const { branch, vpcId, subnetId, subnetAz, securityGroupId, keyPairName, sqlPluginRepo, sqlPluginBranch } = props;
+    const { branch, vpcId, subnetId, subnetAz, securityGroupId, keyPairName, sqlPluginRepo, sqlPluginBranch, stackSuffix } = props;
 
     // Sanitize branch name for use in resource names (replace / with -)
     const safeBranch = branch.replace(/\//g, "-");
+    const nameSuffix = stackSuffix ? `-${stackSuffix}` : "";
 
     // --- CodeGuru Profiling Group ---
+    const profilingGroupName = `opensearch-${safeBranch}${nameSuffix}-profiling`;
     const profilingGroup = new codeguruprofiler.CfnProfilingGroup(this, "OpenSearchProfilingGroup", {
-      profilingGroupName: `opensearch-${safeBranch}-profiling`,
+      profilingGroupName,
       computePlatform: "Default",
     });
 
@@ -56,7 +59,7 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
         "codeguru-profiler:PostAgentProfile",
       ],
       resources: [
-        `arn:aws:codeguru-profiler:${this.region}:${this.account}:profilingGroup/opensearch-${safeBranch}-profiling`,
+        `arn:aws:codeguru-profiler:${this.region}:${this.account}:profilingGroup/opensearch-${safeBranch}${nameSuffix}-profiling`,
       ],
     }));
 
@@ -69,7 +72,8 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
       .replace(/\{\{SAFE_BRANCH\}\}/g, safeBranch)
       .replace(/\{\{REGION\}\}/g, this.region)
       .replace(/\{\{SQL_PLUGIN_REPO\}\}/g, sqlPluginRepo)
-      .replace(/\{\{SQL_PLUGIN_BRANCH\}\}/g, sqlPluginBranch);
+      .replace(/\{\{SQL_PLUGIN_BRANCH\}\}/g, sqlPluginBranch)
+      .replace(/\{\{PROFILING_GROUP_NAME\}\}/g, profilingGroupName);
 
     const userData = ec2.UserData.forLinux();
     userData.addCommands(userDataScript);
@@ -95,12 +99,12 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
     // --- Outputs ---
     new cdk.CfnOutput(this, "InstanceId", { value: instance.instanceId });
     new cdk.CfnOutput(this, "PrivateIp", { value: instance.instancePrivateIp });
-    new cdk.CfnOutput(this, "ProfilingGroupName", { value: `opensearch-${safeBranch}-profiling` });
+    new cdk.CfnOutput(this, "ProfilingGroupName", { value: profilingGroupName });
     new cdk.CfnOutput(this, "SSHCommand", {
       value: `ssh -i ${keyPairName}.pem ec2-user@<instance-ip>`,
     });
     new cdk.CfnOutput(this, "ProfilingGroupConsoleUrl", {
-      value: `https://${this.region}.console.aws.amazon.com/codeguru/profiler/profile?profilingGroupName=opensearch-${safeBranch}-profiling`,
+      value: `https://${this.region}.console.aws.amazon.com/codeguru/profiler/profile?profilingGroupName=${profilingGroupName}`,
     });
   }
 }

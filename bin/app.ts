@@ -36,4 +36,5 @@ new OpenSearchCodeGuruStack(app, stackName, {
   keyPairName,
   sqlPluginRepo,
   sqlPluginBranch,
+  stackSuffix,
 });
