@@ -3,7 +3,7 @@ set -exo pipefail
 exec > /var/log/user-data.log 2>&1
 
 # --- Install dependencies ---
-yum install -y git java-21-amazon-corretto-devel protobuf-compiler protobuf-devel rust cargo cmake
+yum install -y git java-21-amazon-corretto-devel protobuf-compiler protobuf-devel rust cargo cmake cronie
 yum groupinstall -y 'Development Tools'
 export JAVA_HOME=/usr/lib/jvm/java-21-amazon-corretto
 echo 'export JAVA_HOME=/usr/lib/jvm/java-21-amazon-corretto' >> /etc/profile.d/java.sh
@@ -56,8 +56,25 @@ SCRIPT
 chmod +x /home/ec2-user/profile-opensearch.sh
 chown ec2-user:ec2-user /home/ec2-user/profile-opensearch.sh
 
-# --- Cron: run CPU profile every 30 minutes ---
-echo '*/30 * * * * /home/ec2-user/profile-opensearch.sh >> /home/ec2-user/profile-cron.log 2>&1' | crontab -u ec2-user -
+# --- Cron: run CPU profile every 5 minutes ---
+systemctl enable crond
+systemctl start crond
+echo '*/5 * * * * /home/ec2-user/profile-opensearch.sh >> /home/ec2-user/profile-cron.log 2>&1' | crontab -u ec2-user -
+
+# --- Logrotate for OpenSearch and profiler logs ---
+cat > /etc/logrotate.d/opensearch-profiler << 'LOGROTATE'
+/home/ec2-user/opensearch-run.log
+/home/ec2-user/profile-cron.log {
+    size 100M
+    rotate 5
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+    create 0644 ec2-user ec2-user
+}
+LOGROTATE
 
 # --- Step 7: Start OpenSearch ---
 su -l ec2-user -c 'nohup /home/ec2-user/opensearch/bin/opensearch > /home/ec2-user/opensearch-run.log 2>&1 &'

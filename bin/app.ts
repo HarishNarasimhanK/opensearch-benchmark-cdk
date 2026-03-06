@@ -21,6 +21,9 @@ const sqlPluginBranch = process.env.SQL_PLUGIN_BRANCH || "substrait-plan";
 const stackSuffix = process.env.STACK_SUFFIX || "";
 const s3ProfileBucket = process.env.S3_PROFILE_BUCKET || "profiler-async";
 const instanceType = process.env.INSTANCE_TYPE || "r7g.2xlarge";
+const ebsSizeGb = parseInt(process.env.EBS_SIZE_GB || "100", 10);
+const ebsIops = parseInt(process.env.EBS_IOPS || "3000", 10);
+const ebsThroughput = parseInt(process.env.EBS_THROUGHPUT || "125", 10);
 const stackName = stackSuffix
   ? `OpenSearchCodeGuruStack-${stackSuffix}`
   : "OpenSearchCodeGuruStack";
@@ -43,4 +46,7 @@ new OpenSearchCodeGuruStack(app, stackName, {
   stackSuffix,
   s3ProfileBucket,
   instanceType,
+  ebsSizeGb,
+  ebsIops,
+  ebsThroughput,
 });

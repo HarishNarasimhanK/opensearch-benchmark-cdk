@@ -18,13 +18,16 @@ interface OpenSearchCodeGuruStackProps extends cdk.StackProps {
   stackSuffix: string;
   s3ProfileBucket: string;
   instanceType: string;
+  ebsSizeGb: number;
+  ebsIops: number;
+  ebsThroughput: number;
 }
 
 export class OpenSearchCodeGuruStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: OpenSearchCodeGuruStackProps) {
     super(scope, id, props);
 
-    const { branch, opensearchRepo, vpcId, subnetId, subnetAz, securityGroupId, keyPairName, sqlPluginRepo, sqlPluginBranch, stackSuffix, s3ProfileBucket, instanceType } = props;
+    const { branch, opensearchRepo, vpcId, subnetId, subnetAz, securityGroupId, keyPairName, sqlPluginRepo, sqlPluginBranch, stackSuffix, s3ProfileBucket, instanceType, ebsSizeGb, ebsIops, ebsThroughput } = props;
 
     // Sanitize branch name for use in resource names (replace / with -)
     const safeBranch = branch.replace(/\//g, "-");
@@ -75,7 +78,11 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
       blockDevices: [
         {
           deviceName: "/dev/xvda",
-          volume: ec2.BlockDeviceVolume.ebs(100, { volumeType: ec2.EbsDeviceVolumeType.GP3 }),
+          volume: ec2.BlockDeviceVolume.ebs(ebsSizeGb, {
+            volumeType: ec2.EbsDeviceVolumeType.GP3,
+            iops: ebsIops,
+            throughput: ebsThroughput,
+          }),
         },
       ],
       vpcSubnets: { subnets: [subnet] },
@@ -84,8 +91,9 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
     // --- Outputs ---
     new cdk.CfnOutput(this, "InstanceId", { value: instance.instanceId });
     new cdk.CfnOutput(this, "PrivateIp", { value: instance.instancePrivateIp });
+    new cdk.CfnOutput(this, "PublicDns", { value: instance.instancePublicDnsName });
     new cdk.CfnOutput(this, "SSHCommand", {
-      value: `ssh -i ${keyPairName}.pem ec2-user@<instance-ip>`,
+      value: `ssh -i ${keyPairName}.pem ec2-user@${instance.instancePublicDnsName}`,
     });
   }
 }
