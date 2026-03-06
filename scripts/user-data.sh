@@ -76,5 +76,14 @@ cat > /etc/logrotate.d/opensearch-profiler << 'LOGROTATE'
 }
 LOGROTATE
 
-# --- Step 7: Start OpenSearch ---
+# --- Step 7: Configure OpenSearch for external access ---
+cat > /home/ec2-user/opensearch/config/opensearch.yml << 'EOF'
+node.name: node-1
+cluster.name: my-application
+network.host: 0.0.0.0
+cluster.initial_cluster_manager_nodes: ["node-1"]
+EOF
+chown ec2-user:ec2-user /home/ec2-user/opensearch/config/opensearch.yml
+
+# --- Step 8: Start OpenSearch ---
 su -l ec2-user -c 'nohup /home/ec2-user/opensearch/bin/opensearch > /home/ec2-user/opensearch-run.log 2>&1 &'
