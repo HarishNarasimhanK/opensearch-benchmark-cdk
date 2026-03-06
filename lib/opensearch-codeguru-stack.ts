@@ -1,13 +1,13 @@
 import * as cdk from "aws-cdk-lib";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as iam from "aws-cdk-lib/aws-iam";
-import * as codeguruprofiler from "aws-cdk-lib/aws-codeguruprofiler";
 import { Construct } from "constructs";
 import * as fs from "fs";
 import * as path from "path";
 
 interface OpenSearchCodeGuruStackProps extends cdk.StackProps {
   branch: string;
+  opensearchRepo: string;
   vpcId: string;
   subnetId: string;
   subnetAz: string;
@@ -16,24 +16,18 @@ interface OpenSearchCodeGuruStackProps extends cdk.StackProps {
   sqlPluginRepo: string;
   sqlPluginBranch: string;
   stackSuffix: string;
+  s3ProfileBucket: string;
+  instanceType: string;
 }
 
 export class OpenSearchCodeGuruStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: OpenSearchCodeGuruStackProps) {
     super(scope, id, props);
 
-    const { branch, vpcId, subnetId, subnetAz, securityGroupId, keyPairName, sqlPluginRepo, sqlPluginBranch, stackSuffix } = props;
+    const { branch, opensearchRepo, vpcId, subnetId, subnetAz, securityGroupId, keyPairName, sqlPluginRepo, sqlPluginBranch, stackSuffix, s3ProfileBucket, instanceType } = props;
 
     // Sanitize branch name for use in resource names (replace / with -)
     const safeBranch = branch.replace(/\//g, "-");
-    const nameSuffix = stackSuffix ? `-${stackSuffix}` : "";
-
-    // --- CodeGuru Profiling Group ---
-    const profilingGroupName = `opensearch-${safeBranch}${nameSuffix}-profiling`;
-    const profilingGroup = new codeguruprofiler.CfnProfilingGroup(this, "OpenSearchProfilingGroup", {
-      profilingGroupName,
-      computePlatform: "Default",
-    });
 
     // --- Look up existing VPC and Subnet ---
     const vpc = ec2.Vpc.fromLookup(this, "ExistingVpc", { vpcId });
@@ -45,23 +39,11 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
     // --- Use existing Security Group ---
     const sg = ec2.SecurityGroup.fromSecurityGroupId(this, "ExistingSG", securityGroupId);
 
-    // --- IAM Role for EC2 ---
-    const role = new iam.Role(this, "OpenSearchInstanceRole", {
-      assumedBy: new iam.ServicePrincipal("ec2.amazonaws.com"),
-      managedPolicies: [
-        iam.ManagedPolicy.fromAwsManagedPolicyName("AmazonSSMManagedInstanceCore"),
-      ],
+    // --- IAM: use existing instance profile with S3 and CloudWatch permissions ---
+    const instanceProfile = iam.InstanceProfile.fromInstanceProfileAttributes(this, "ExistingInstanceProfile", {
+      instanceProfileArn: "arn:aws:iam::619046718411:instance-profile/CloudWatchAgentRole",
+      role: iam.Role.fromRoleName(this, "OpenSearchInstanceRole", "CloudWatchAgentRole"),
     });
-
-    role.addToPolicy(new iam.PolicyStatement({
-      actions: [
-        "codeguru-profiler:ConfigureAgent",
-        "codeguru-profiler:PostAgentProfile",
-      ],
-      resources: [
-        `arn:aws:codeguru-profiler:${this.region}:${this.account}:profilingGroup/opensearch-${safeBranch}${nameSuffix}-profiling`,
-      ],
-    }));
 
     // --- Key Pair reference ---
     const keyPair = ec2.KeyPair.fromKeyPairName(this, "ExistingKeyPair", keyPairName);
@@ -69,11 +51,12 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
     // --- User Data: load from scripts/user-data.sh with placeholder substitution ---
     const userDataScript = fs.readFileSync(path.join(__dirname, "..", "scripts", "user-data.sh"), "utf-8")
       .replace(/\{\{BRANCH\}\}/g, branch)
+      .replace(/\{\{OPENSEARCH_REPO\}\}/g, opensearchRepo)
       .replace(/\{\{SAFE_BRANCH\}\}/g, safeBranch)
       .replace(/\{\{REGION\}\}/g, this.region)
       .replace(/\{\{SQL_PLUGIN_REPO\}\}/g, sqlPluginRepo)
       .replace(/\{\{SQL_PLUGIN_BRANCH\}\}/g, sqlPluginBranch)
-      .replace(/\{\{PROFILING_GROUP_NAME\}\}/g, profilingGroupName);
+      .replace(/\{\{S3_PROFILE_BUCKET\}\}/g, s3ProfileBucket);
 
     const userData = ec2.UserData.forLinux();
     userData.addCommands(userDataScript);
@@ -81,10 +64,12 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
     // --- EC2 Instance ---
     const instance = new ec2.Instance(this, "OpenSearchInstance", {
       vpc,
-      instanceType: ec2.InstanceType.of(ec2.InstanceClass.M5, ec2.InstanceSize.XLARGE2),
-      machineImage: ec2.MachineImage.latestAmazonLinux2023(),
+      instanceType: new ec2.InstanceType(instanceType),
+      machineImage: ec2.MachineImage.latestAmazonLinux2023({
+        cpuType: ec2.AmazonLinuxCpuType.ARM_64,
+      }),
       securityGroup: sg,
-      role,
+      instanceProfile,
       userData,
       keyPair,
       blockDevices: [
@@ -99,12 +84,8 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
     // --- Outputs ---
     new cdk.CfnOutput(this, "InstanceId", { value: instance.instanceId });
     new cdk.CfnOutput(this, "PrivateIp", { value: instance.instancePrivateIp });
-    new cdk.CfnOutput(this, "ProfilingGroupName", { value: profilingGroupName });
     new cdk.CfnOutput(this, "SSHCommand", {
       value: `ssh -i ${keyPairName}.pem ec2-user@<instance-ip>`,
-    });
-    new cdk.CfnOutput(this, "ProfilingGroupConsoleUrl", {
-      value: `https://${this.region}.console.aws.amazon.com/codeguru/profiler/profile?profilingGroupName=${profilingGroupName}`,
     });
   }
 }

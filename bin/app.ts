@@ -10,6 +10,7 @@ const app = new cdk.App();
 const account = process.env.CDK_ACCOUNT || process.env.CDK_DEFAULT_ACCOUNT;
 const region = process.env.CDK_REGION || process.env.CDK_DEFAULT_REGION || "us-east-1";
 const branch = process.env.OPENSEARCH_BRANCH || "feature/datafusion";
+const opensearchRepo = process.env.OPENSEARCH_REPO || "https://github.com/opensearch-project/OpenSearch.git";
 const vpcId = process.env.VPC_ID;
 const subnetId = process.env.SUBNET_ID;
 const subnetAz = process.env.SUBNET_AZ;
@@ -18,6 +19,8 @@ const securityGroupId = process.env.SECURITY_GROUP_ID;
 const sqlPluginRepo = process.env.SQL_PLUGIN_REPO || "https://github.com/bharath-techie/sql.git";
 const sqlPluginBranch = process.env.SQL_PLUGIN_BRANCH || "substrait-plan";
 const stackSuffix = process.env.STACK_SUFFIX || "";
+const s3ProfileBucket = process.env.S3_PROFILE_BUCKET || "profiler-async";
+const instanceType = process.env.INSTANCE_TYPE || "r7g.2xlarge";
 const stackName = stackSuffix
   ? `OpenSearchCodeGuruStack-${stackSuffix}`
   : "OpenSearchCodeGuruStack";
@@ -29,6 +32,7 @@ if (!vpcId || !subnetId || !subnetAz || !keyPairName || !securityGroupId) {
 new OpenSearchCodeGuruStack(app, stackName, {
   env: { account, region },
   branch,
+  opensearchRepo,
   vpcId,
   subnetId,
   subnetAz,
@@ -37,4 +41,6 @@ new OpenSearchCodeGuruStack(app, stackName, {
   sqlPluginRepo,
   sqlPluginBranch,
   stackSuffix,
+  s3ProfileBucket,
+  instanceType,
 });
