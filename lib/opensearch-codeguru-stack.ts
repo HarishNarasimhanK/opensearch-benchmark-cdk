@@ -21,13 +21,14 @@ interface OpenSearchCodeGuruStackProps extends cdk.StackProps {
   ebsSizeGb: number;
   ebsIops: number;
   ebsThroughput: number;
+  jvmHeap: string;
 }
 
 export class OpenSearchCodeGuruStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: OpenSearchCodeGuruStackProps) {
     super(scope, id, props);
 
-    const { branch, opensearchRepo, vpcId, subnetId, subnetAz, securityGroupId, keyPairName, sqlPluginRepo, sqlPluginBranch, stackSuffix, s3ProfileBucket, instanceType, ebsSizeGb, ebsIops, ebsThroughput } = props;
+    const { branch, opensearchRepo, vpcId, subnetId, subnetAz, securityGroupId, keyPairName, sqlPluginRepo, sqlPluginBranch, stackSuffix, s3ProfileBucket, instanceType, ebsSizeGb, ebsIops, ebsThroughput, jvmHeap } = props;
 
     // Sanitize branch name for use in resource names (replace / with -)
     const safeBranch = branch.replace(/\//g, "-");
@@ -59,14 +60,14 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
       .replace(/\{\{REGION\}\}/g, this.region)
       .replace(/\{\{SQL_PLUGIN_REPO\}\}/g, sqlPluginRepo)
       .replace(/\{\{SQL_PLUGIN_BRANCH\}\}/g, sqlPluginBranch)
-      .replace(/\{\{S3_PROFILE_BUCKET\}\}/g, s3ProfileBucket);
+      .replace(/\{\{S3_PROFILE_BUCKET\}\}/g, s3ProfileBucket)
+      .replace(/\{\{JVM_HEAP\}\}/g, jvmHeap);
 
     const userData = ec2.UserData.forLinux();
     userData.addCommands(userDataScript);
 
-    // --- EC2 Instance ---
-    const instance = new ec2.Instance(this, "OpenSearchInstance", {
-      vpc,
+    // --- Launch Template (needed for EBS throughput support) ---
+    const launchTemplate = new ec2.LaunchTemplate(this, "OpenSearchLaunchTemplate", {
       instanceType: new ec2.InstanceType(instanceType),
       machineImage: ec2.MachineImage.latestAmazonLinux2023({
         cpuType: ec2.AmazonLinuxCpuType.ARM_64,
@@ -85,8 +86,29 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
           }),
         },
       ],
+    });
+
+    // --- EC2 Instance ---
+    const instance = new ec2.Instance(this, "OpenSearchInstance", {
+      vpc,
+      instanceType: new ec2.InstanceType(instanceType),
+      machineImage: ec2.MachineImage.latestAmazonLinux2023({
+        cpuType: ec2.AmazonLinuxCpuType.ARM_64,
+      }),
       vpcSubnets: { subnets: [subnet] },
     });
+
+    // Override the instance to use the launch template via L1 escape hatch
+    const cfnInstance = instance.node.defaultChild as cdk.CfnResource;
+    cfnInstance.addPropertyOverride("LaunchTemplate", {
+      LaunchTemplateId: launchTemplate.launchTemplateId,
+      Version: launchTemplate.latestVersionNumber,
+    });
+    // Remove properties that come from the launch template
+    cfnInstance.addPropertyDeletionOverride("SecurityGroupIds");
+    cfnInstance.addPropertyDeletionOverride("UserData");
+    cfnInstance.addPropertyDeletionOverride("IamInstanceProfile");
+    cfnInstance.addPropertyDeletionOverride("KeyName");
 
     // --- Outputs ---
     new cdk.CfnOutput(this, "InstanceId", { value: instance.instanceId });

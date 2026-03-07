@@ -24,6 +24,7 @@ const instanceType = process.env.INSTANCE_TYPE || "r7g.2xlarge";
 const ebsSizeGb = parseInt(process.env.EBS_SIZE_GB || "100", 10);
 const ebsIops = parseInt(process.env.EBS_IOPS || "3000", 10);
 const ebsThroughput = parseInt(process.env.EBS_THROUGHPUT || "125", 10);
+const jvmHeap = process.env.JVM_HEAP || "8g";
 const stackName = stackSuffix
   ? `OpenSearchCodeGuruStack-${stackSuffix}`
   : "OpenSearchCodeGuruStack";
@@ -49,4 +50,5 @@ new OpenSearchCodeGuruStack(app, stackName, {
   ebsSizeGb,
   ebsIops,
   ebsThroughput,
+  jvmHeap,
 });

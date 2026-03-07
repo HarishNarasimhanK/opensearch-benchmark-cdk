@@ -85,5 +85,9 @@ cluster.initial_cluster_manager_nodes: ["node-1"]
 EOF
 chown ec2-user:ec2-user /home/ec2-user/opensearch/config/opensearch.yml
 
+# --- Step 7b: Configure JVM heap ---
+sed -i 's/^-Xms.*/-Xms{{JVM_HEAP}}/' /home/ec2-user/opensearch/config/jvm.options
+sed -i 's/^-Xmx.*/-Xmx{{JVM_HEAP}}/' /home/ec2-user/opensearch/config/jvm.options
+
 # --- Step 8: Start OpenSearch ---
 su -l ec2-user -c 'nohup /home/ec2-user/opensearch/bin/opensearch > /home/ec2-user/opensearch-run.log 2>&1 &'
