@@ -22,13 +22,18 @@ interface OpenSearchCodeGuruStackProps extends cdk.StackProps {
   ebsIops: number;
   ebsThroughput: number;
   jvmHeap: string;
+  benchmarkEnabled: boolean;
+  benchmarkInstanceType: string;
+  benchmarkEbsSizeGb: number;
+  workloadRepo: string;
+  workloadBranch: string;
 }
 
 export class OpenSearchCodeGuruStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: OpenSearchCodeGuruStackProps) {
     super(scope, id, props);
 
-    const { branch, opensearchRepo, vpcId, subnetId, subnetAz, securityGroupId, keyPairName, sqlPluginRepo, sqlPluginBranch, stackSuffix, s3ProfileBucket, instanceType, ebsSizeGb, ebsIops, ebsThroughput, jvmHeap } = props;
+    const { branch, opensearchRepo, vpcId, subnetId, subnetAz, securityGroupId, keyPairName, sqlPluginRepo, sqlPluginBranch, stackSuffix, s3ProfileBucket, instanceType, ebsSizeGb, ebsIops, ebsThroughput, jvmHeap, benchmarkEnabled, benchmarkInstanceType, benchmarkEbsSizeGb, workloadRepo, workloadBranch } = props;
 
     // Sanitize branch name for use in resource names (replace / with -)
     const safeBranch = branch.replace(/\//g, "-");
@@ -43,10 +48,17 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
     // --- Use existing Security Group ---
     const sg = ec2.SecurityGroup.fromSecurityGroupId(this, "ExistingSG", securityGroupId);
 
-    // --- IAM: use existing instance profile with S3 and CloudWatch permissions ---
-    const instanceProfile = iam.InstanceProfile.fromInstanceProfileAttributes(this, "ExistingInstanceProfile", {
-      instanceProfileArn: "arn:aws:iam::619046718411:instance-profile/CloudWatchAgentRole",
-      role: iam.Role.fromRoleName(this, "OpenSearchInstanceRole", "CloudWatchAgentRole"),
+    // --- IAM: create role with S3 and CloudWatch permissions ---
+    // Created by CDK so it works in any account — no hardcoded ARNs.
+    const role = new iam.Role(this, "OpenSearchInstanceRole", {
+      assumedBy: new iam.ServicePrincipal("ec2.amazonaws.com"),
+      managedPolicies: [
+        iam.ManagedPolicy.fromAwsManagedPolicyName("AmazonS3FullAccess"),
+        iam.ManagedPolicy.fromAwsManagedPolicyName("CloudWatchAgentServerPolicy"),
+      ],
+    });
+    const instanceProfile = new iam.InstanceProfile(this, "OpenSearchInstanceProfile", {
+      role,
     });
 
     // --- Key Pair reference ---
@@ -117,5 +129,64 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
     new cdk.CfnOutput(this, "SSHCommand", {
       value: `ssh -i ${keyPairName}.pem ec2-user@${instance.instancePublicDnsName}`,
     });
+
+    // --- Benchmark Instance (optional) ---
+    if (benchmarkEnabled) {
+      const benchmarkUserDataScript = fs.readFileSync(path.join(__dirname, "..", "scripts", "user-data-benchmark.sh"), "utf-8")
+        .replace(/\{\{WORKLOAD_REPO\}\}/g, workloadRepo)
+        .replace(/\{\{WORKLOAD_BRANCH\}\}/g, workloadBranch)
+        .replace(/\{\{OPENSEARCH_PRIVATE_IP\}\}/g, instance.instancePrivateIp)
+        .replace(/\{\{S3_PROFILE_BUCKET\}\}/g, s3ProfileBucket);
+
+      const benchmarkUserData = ec2.UserData.forLinux();
+      benchmarkUserData.addCommands(benchmarkUserDataScript);
+
+      const benchmarkLaunchTemplate = new ec2.LaunchTemplate(this, "BenchmarkLaunchTemplate", {
+        instanceType: new ec2.InstanceType(benchmarkInstanceType),
+        machineImage: ec2.MachineImage.latestAmazonLinux2023({
+          cpuType: ec2.AmazonLinuxCpuType.ARM_64,
+        }),
+        securityGroup: sg,
+        instanceProfile,
+        userData: benchmarkUserData,
+        keyPair,
+        blockDevices: [
+          {
+            deviceName: "/dev/xvda",
+            volume: ec2.BlockDeviceVolume.ebs(benchmarkEbsSizeGb, {
+              volumeType: ec2.EbsDeviceVolumeType.GP3,
+            }),
+          },
+        ],
+      });
+
+      const benchmarkInstance = new ec2.Instance(this, "BenchmarkInstance", {
+        vpc,
+        instanceType: new ec2.InstanceType(benchmarkInstanceType),
+        machineImage: ec2.MachineImage.latestAmazonLinux2023({
+          cpuType: ec2.AmazonLinuxCpuType.ARM_64,
+        }),
+        vpcSubnets: { subnets: [subnet] },
+      });
+
+      const cfnBenchmarkInstance = benchmarkInstance.node.defaultChild as cdk.CfnResource;
+      cfnBenchmarkInstance.addPropertyOverride("LaunchTemplate", {
+        LaunchTemplateId: benchmarkLaunchTemplate.launchTemplateId,
+        Version: benchmarkLaunchTemplate.latestVersionNumber,
+      });
+      cfnBenchmarkInstance.addPropertyDeletionOverride("SecurityGroupIds");
+      cfnBenchmarkInstance.addPropertyDeletionOverride("UserData");
+      cfnBenchmarkInstance.addPropertyDeletionOverride("KeyName");
+      cfnBenchmarkInstance.addPropertyDeletionOverride("IamInstanceProfile");
+
+      new cdk.CfnOutput(this, "BenchmarkInstanceId", { value: benchmarkInstance.instanceId });
+      new cdk.CfnOutput(this, "BenchmarkPublicDns", { value: benchmarkInstance.instancePublicDnsName });
+      new cdk.CfnOutput(this, "BenchmarkSSHCommand", {
+        value: `ssh -i ${keyPairName}.pem ec2-user@${benchmarkInstance.instancePublicDnsName}`,
+      });
+      new cdk.CfnOutput(this, "RunBenchmarkCommand", {
+        value: `bash run-benchmark.sh ${instance.instancePrivateIp}`,
+      });
+    }
   }
 }

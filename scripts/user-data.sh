@@ -12,22 +12,26 @@ echo 'vm.max_map_count=262144' >> /etc/sysctl.conf
 
 # --- Step 1: Clone and build OpenSearch ---
 su -l ec2-user -c 'git clone --branch {{BRANCH}} {{OPENSEARCH_REPO}} /home/ec2-user/opensearch-src'
-su -l ec2-user -c 'cd /home/ec2-user/opensearch-src && ./gradlew publishToMavenLocal'
+su -l ec2-user -c 'cd /home/ec2-user/opensearch-src && ./gradlew publishToMavenLocal -x missingJavadoc'
 
-# --- Step 2: Clone and build SQL plugin (skipped) ---
-# su -l ec2-user -c 'git clone --branch {{SQL_PLUGIN_BRANCH}} {{SQL_PLUGIN_REPO}} /home/ec2-user/sql-plugin'
-# su -l ec2-user -c 'cd /home/ec2-user/sql-plugin && ./gradlew publishToMavenLocal'
+# --- Step 2: Clone and build SQL plugin ---
+su -l ec2-user -c 'git clone --branch {{SQL_PLUGIN_BRANCH}} {{SQL_PLUGIN_REPO}} /home/ec2-user/sql-plugin'
+su -l ec2-user -c 'cd /home/ec2-user/sql-plugin && ./gradlew publishToMavenLocal'
 
 # --- Step 3: Build local distribution ---
-su -l ec2-user -c 'cd /home/ec2-user/opensearch-src && ./gradlew localDistro'
+su -l ec2-user -c 'cd /home/ec2-user/opensearch-src && ./gradlew localDistro -x missingJavadoc'
 
 # --- Step 4: Extract the local distribution ---
 su -l ec2-user -c 'mkdir -p /home/ec2-user/opensearch && cp -r /home/ec2-user/opensearch-src/build/distribution/local/opensearch-*/* /home/ec2-user/opensearch/'
 
-# --- Step 5: Install plugins (skipped) ---
-# su -l ec2-user -c '/home/ec2-user/opensearch/bin/opensearch-plugin install --batch org.opensearch.plugin:opensearch-job-scheduler:3.3.0.0'
-# su -l ec2-user -c '/home/ec2-user/opensearch/bin/opensearch-plugin install --batch file:///home/ec2-user/sql-plugin/plugin/build/distributions/opensearch-sql-plugin-*.zip'
-# su -l ec2-user -c '/home/ec2-user/opensearch/bin/opensearch-plugin install --batch file:///home/ec2-user/opensearch-src/plugins/engine-datafusion/build/distributions/engine-datafusion-*.zip'
+# --- Step 5: Install plugins ---
+su -l ec2-user -c 'cd /home/ec2-user/opensearch-src && ./gradlew :plugins:engine-datafusion:bundlePlugin :sandbox:plugins:analytics-engine:bundlePlugin -x missingJavadoc'
+su -l ec2-user -c '/home/ec2-user/opensearch/bin/opensearch-plugin install --batch org.opensearch.plugin:opensearch-job-scheduler:3.3.0.0'
+su -l ec2-user -c '/home/ec2-user/opensearch/bin/opensearch-plugin install --batch file:///home/ec2-user/sql-plugin/plugin/build/distributions/opensearch-sql-3.3.0.0-SNAPSHOT.zip'
+su -l ec2-user -c '/home/ec2-user/opensearch/bin/opensearch-plugin install --batch file:///home/ec2-user/opensearch-src/sandbox/plugins/analytics-engine/build/distributions/analytics-engine-3.3.0-SNAPSHOT.zip'
+# Remove duplicate commons-io jar from analytics-engine to avoid jar hell with engine-datafusion
+su -l ec2-user -c 'rm -f /home/ec2-user/opensearch/plugins/analytics-engine/commons-io-2.16.0.jar'
+su -l ec2-user -c '/home/ec2-user/opensearch/bin/opensearch-plugin install --batch file:///home/ec2-user/opensearch-src/plugins/engine-datafusion/build/distributions/engine-datafusion-3.3.0-SNAPSHOT.zip'
 
 # --- Step 6: Install async-profiler ---
 su -l ec2-user -c 'mkdir -p /home/ec2-user/async-profiler'

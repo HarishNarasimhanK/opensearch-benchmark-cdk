@@ -1,87 +1,161 @@
 # OpenSearch Profiler Stack
 
-Provisions an EC2 instance that builds OpenSearch from source and profiles it with [async-profiler](https://github.com/async-profiler/async-profiler). Flamegraphs are uploaded to S3 on a cron schedule.
+Provisions two EC2 instances: one that builds OpenSearch from source with the datafusion engine, and a benchmark instance that runs OpenSearch Benchmark (OSB) with the clickbench workload.
 
 ## Prerequisites
 
 - Node.js 18+, npm
 - AWS CDK v2 (`npm install -g aws-cdk`)
-- An AWS account with a VPC, subnet, security group, and EC2 key pair
-- An S3 bucket for flamegraph uploads
-- An IAM instance profile with S3 write access (default: `CloudWatchAgentRole`)
+- AWS credentials (`ada credentials update --account <account> --role Admin`)
 
 ## Quick Start
 
 1. Clone and install:
    ```bash
-   git clone <this-repo> && cd <this-repo>
+   git clone ssh://git.amazon.com:2222/pkg/OpenSearchEC2WithCodeGuruCDK
+   cd OpenSearchEC2WithCodeGuruCDK
+   git fetch origin share/hxarishk/hxarishk/automating-performance-correctness-tests
+   git checkout hxarishk/automating-performance-correctness-tests
    npm install
    ```
 
-2. Copy and edit `.env`:
+2. Deploy:
    ```bash
-   cp .env.example .env   # or edit .env directly
+   npx cdk deploy
    ```
+   If no `.env` file exists, `setup-env.sh` runs automatically to discover your VPC, subnet, security group, key pair, S3 bucket, and writes `.env`.
 
-3. Fill in required values:
-   | Variable | Description |
-   |---|---|
-   | `CDK_ACCOUNT` | AWS account ID |
-   | `CDK_REGION` | AWS region |
-   | `VPC_ID` | VPC to launch in |
-   | `SUBNET_ID` | Subnet (must have public IP assignment) |
-   | `SUBNET_AZ` | Subnet availability zone |
-   | `SECURITY_GROUP_ID` | SG allowing SSH (port 22) and OpenSearch (port 9200) |
-   | `KEY_PAIR_NAME` | EC2 key pair name |
-   | `PEM_PATH` | Local path to the `.pem` file |
-   | `OPENSEARCH_REPO` | Git URL for OpenSearch fork |
-   | `OPENSEARCH_BRANCH` | Branch to build |
-   | `S3_PROFILE_BUCKET` | S3 bucket for flamegraph uploads |
+3. CDK outputs will show SSH commands and instance details for both instances.
 
-4. Deploy:
-   ```bash
-   bash scripts/deploy.sh
-   ```
+## SSH Key Pair
 
-5. SSH in and tail the build:
-   ```bash
-   ssh -i <PEM_PATH> ec2-user@<public-dns> 'sudo tail -f /var/log/user-data.log'
-   ```
+On first run, `setup-env.sh` creates an EC2 key pair called `opensearch-benchmark` and saves the private key to:
+```
+$HOME/opensearch-benchmark.pem
+```
+Keep this file safe — you cannot download it again. If you lose it, delete the key pair in AWS and re-run `setup-env.sh` to create a new one.
+
+## Architecture
+
+`npx cdk deploy` creates two EC2 instances in parallel:
+
+| Instance | Type | EBS | Purpose |
+|---|---|---|---|
+| OpenSearch | `r7g.2xlarge` | 100 GB | Builds OpenSearch from source, installs plugins, runs OpenSearch |
+| Benchmark | `m7g.medium` | 500 GB | Installs OSB, clones workload repo, auto-runs clickbench benchmark |
+
+Both instances are in the same VPC/subnet/security group. The benchmark instance talks to OpenSearch via private IP on port 9200.
+
+## Logs
+
+### OpenSearch Instance
+
+| Log | What it shows | Command |
+|---|---|---|
+| `/var/log/user-data.log` | Build progress (clone, gradle, plugin install, OpenSearch start) | `tail -f /var/log/user-data.log` |
+| `~/opensearch-run.log` | OpenSearch runtime logs (errors, queries, GC) | `tail -f ~/opensearch-run.log` |
+| `~/profile-cron.log` | Async-profiler cron output | `cat ~/profile-cron.log` |
+
+SSH into OpenSearch instance:
+```bash
+ssh -i $HOME/opensearch-benchmark.pem ec2-user@<opensearch-public-dns>
+```
+
+### Benchmark Instance
+
+| Log | What it shows | Command |
+|---|---|---|
+| `/var/log/user-data.log` | Setup progress (pip install, git clone, OSB install) | `tail -f /var/log/user-data.log` |
+| `~/benchmark-run.log` | Benchmark execution (waiting for OpenSearch, indexing, query results) | `tail -f ~/benchmark-run.log` |
+| `~/.osb/logs/benchmark.log` | Detailed OSB logs (per-query errors, HTTP responses) | `tail -100 ~/.osb/logs/benchmark.log` |
+| `~/benchmark-results/*.csv` | Final benchmark results in CSV format | `cat ~/benchmark-results/*.csv` |
+
+SSH into Benchmark instance:
+```bash
+ssh -i $HOME/opensearch-benchmark.pem ec2-user@<benchmark-public-dns>
+```
+
+### Checking for errors
+```bash
+# OSB query errors (on benchmark instance)
+grep "ERROR" ~/.osb/logs/benchmark.log | grep -v "error occured" | tail -20
+
+# OpenSearch engine errors (on OpenSearch instance)
+grep -A 10 "ERROR" ~/opensearch-run.log | tail -40
+
+# Manually run a failing PPL query for debugging
+curl -s -X POST 'http://<opensearch-private-ip>:9200/_plugins/_ppl' \
+  -H 'Content-Type: application/json' \
+  -d '{"query": "source = clickbench | stats count()"}' | python3 -m json.tool
+```
+
+## Benchmark Results
+
+Results are saved to:
+- Local: `~/benchmark-results/<run-id>.csv` on the benchmark instance
+- S3: `s3://<s3-profile-bucket>/benchmark-results/<run-id>.csv`
+
+Download results to your machine:
+```bash
+aws s3 cp s3://<s3-profile-bucket>/benchmark-results/ ~/Downloads/ --recursive
+```
+
+## Required Config (auto-generated by setup-env.sh)
+
+| Variable | Description |
+|---|---|
+| `CDK_ACCOUNT` | AWS account ID |
+| `CDK_REGION` | AWS region |
+| `VPC_ID` | VPC to launch in |
+| `SUBNET_ID` | Subnet (must have public IP assignment) |
+| `SUBNET_AZ` | Subnet availability zone |
+| `SECURITY_GROUP_ID` | SG allowing SSH (22) and OpenSearch (9200) |
+| `KEY_PAIR_NAME` | EC2 key pair name |
+| `PEM_PATH` | Local path to the `.pem` file |
+| `S3_PROFILE_BUCKET` | S3 bucket for flamegraphs and benchmark results |
 
 ## Optional Config
 
 | Variable | Default | Description |
 |---|---|---|
-| `STACK_SUFFIX` | _(empty)_ | Deploy multiple stacks side-by-side (e.g. `v2`) |
-| `INSTANCE_TYPE` | `r7g.2xlarge` | EC2 instance type (ARM by default) |
-| `EBS_SIZE_GB` | `100` | Root volume size |
+| `STACK_SUFFIX` | _(empty)_ | Deploy multiple stacks side-by-side |
+| `INSTANCE_TYPE` | `r7g.2xlarge` | OpenSearch EC2 instance type |
+| `EBS_SIZE_GB` | `100` | OpenSearch root volume size |
 | `EBS_IOPS` | `3000` | gp3 IOPS |
 | `EBS_THROUGHPUT` | `125` | gp3 throughput (MB/s) |
-| `SQL_PLUGIN_REPO` | _(disabled)_ | SQL plugin fork URL (build skipped by default) |
+| `JVM_HEAP` | `8g` | OpenSearch JVM heap size |
+| `OPENSEARCH_REPO` | `opensearch-project/OpenSearch` | OpenSearch git repo |
+| `OPENSEARCH_BRANCH` | `feature/datafusion` | Branch to build |
+| `SQL_PLUGIN_REPO` | `bharath-techie/sql` | SQL plugin git repo |
 | `SQL_PLUGIN_BRANCH` | `substrait-plan` | SQL plugin branch |
-
-## What It Does
-
-1. Launches an ARM EC2 instance (Amazon Linux 2023)
-2. Clones and builds OpenSearch from your configured repo/branch
-3. Installs async-profiler (ARM build)
-4. Starts OpenSearch
-5. Runs a cron job every 5 minutes that captures a 60s CPU flamegraph and uploads it to S3
+| `BENCHMARK_ENABLED` | `true` | Create benchmark instance |
+| `BENCHMARK_INSTANCE_TYPE` | `m7g.medium` | Benchmark EC2 instance type |
+| `BENCHMARK_EBS_SIZE_GB` | `500` | Benchmark root volume size |
+| `WORKLOAD_REPO` | `HarishNarasimhanK/opensearch-benchmark-workloads` | OSB workload git repo |
+| `WORKLOAD_BRANCH` | `main` | Workload branch |
 
 ## Commands
 
 ```bash
-bash scripts/deploy.sh          # Deploy stack
-bash scripts/destroy.sh         # Tear down stack
+npx cdk deploy                  # Deploy both instances (auto-runs setup-env.sh if no .env)
+npx cdk destroy                 # Tear down everything
 npx cdk synth                   # Preview CloudFormation template
-npx cdk destroy <StackName>     # Destroy specific stack
+bash scripts/deploy.sh          # Deploy + print SSH commands
 ```
 
-## On the EC2 Instance
+## On the OpenSearch Instance
 
 ```bash
+curl -s http://localhost:9200                  # Check OpenSearch is running
 ./opensearch/bin/opensearch                    # Start OpenSearch manually
 ./profile-opensearch.sh                        # Run a one-off CPU profile
 ls ~/profiles/                                 # View local flamegraphs
-aws s3 ls s3://<bucket>/<hostname>/            # View uploaded flamegraphs
+```
+
+## On the Benchmark Instance
+
+```bash
+bash run-benchmark.sh                          # Run benchmark (auto-runs on deploy)
+bash run-benchmark.sh <opensearch-private-ip>  # Run against a specific host
+cat ~/benchmark-results/*.csv                  # View results
 ```

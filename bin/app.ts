@@ -1,7 +1,19 @@
 #!/usr/bin/env node
 import * as cdk from "aws-cdk-lib";
 import * as dotenv from "dotenv";
+import { execSync } from "child_process";
+import * as fs from "fs";
+import * as path from "path";
 import { OpenSearchCodeGuruStack } from "../lib/opensearch-codeguru-stack";
+
+// Auto-run setup-env.sh if .env doesn't exist yet
+const envFile = path.join(__dirname, "..", ".env");
+if (!fs.existsSync(envFile)) {
+  console.log("No .env file found — running setup-env.sh...\n");
+  const setupScript = path.join(__dirname, "..", "scripts", "setup-env.sh");
+  execSync(`bash "${setupScript}"`, { stdio: "inherit" });
+  console.log("");
+}
 
 dotenv.config();
 
@@ -25,6 +37,11 @@ const ebsSizeGb = parseInt(process.env.EBS_SIZE_GB || "100", 10);
 const ebsIops = parseInt(process.env.EBS_IOPS || "3000", 10);
 const ebsThroughput = parseInt(process.env.EBS_THROUGHPUT || "125", 10);
 const jvmHeap = process.env.JVM_HEAP || "8g";
+const benchmarkEnabled = (process.env.BENCHMARK_ENABLED || "true").toLowerCase() === "true";
+const benchmarkInstanceType = process.env.BENCHMARK_INSTANCE_TYPE || "m7g.medium";
+const benchmarkEbsSizeGb = parseInt(process.env.BENCHMARK_EBS_SIZE_GB || "500", 10);
+const workloadRepo = process.env.WORKLOAD_REPO || "https://github.com/HarishNarasimhanK/opensearch-benchmark-workloads.git";
+const workloadBranch = process.env.WORKLOAD_BRANCH || "main";
 const stackName = stackSuffix
   ? `OpenSearchCodeGuruStack-${stackSuffix}`
   : "OpenSearchCodeGuruStack";
@@ -51,4 +68,9 @@ new OpenSearchCodeGuruStack(app, stackName, {
   ebsIops,
   ebsThroughput,
   jvmHeap,
+  benchmarkEnabled,
+  benchmarkInstanceType,
+  benchmarkEbsSizeGb,
+  workloadRepo,
+  workloadBranch,
 });
