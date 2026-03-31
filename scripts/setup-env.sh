@@ -41,7 +41,7 @@ while [[ $# -gt 0 ]]; do
       echo "  --region     AWS region (default: us-east-1)"
       echo "  --key-name   Existing EC2 key pair name (default: auto-create 'opensearch-benchmark')"
       echo "  --sg-name    Security group name (default: opensearch-benchmark)"
-      echo "  --s3-bucket  S3 bucket for profiler flamegraphs (default: profiler-async)"
+      echo "  --s3-bucket  S3 bucket for results and flamegraphs (default: opensearch-codeguru-<account-id>)"
       exit 0
       ;;
     *) echo "Unknown option: $1"; exit 1 ;;
@@ -74,7 +74,7 @@ echo "  ✅ Account: $CDK_ACCOUNT"
 
 # Set default S3 bucket name using account ID for global uniqueness
 if [ -z "$S3_BUCKET" ]; then
-  S3_BUCKET="profiler-async-${CDK_ACCOUNT}"
+  S3_BUCKET="opensearch-codeguru-${CDK_ACCOUNT}"
 fi
 
 # --- Step 3: Find the default VPC ---
@@ -262,14 +262,14 @@ SECURITY_GROUP_ID=$SECURITY_GROUP_ID
 KEY_PAIR_NAME=$KEY_NAME
 PEM_PATH=\$HOME/$KEY_NAME.pem
 
-# S3 bucket for async-profiler flamegraphs
-S3_PROFILE_BUCKET=$S3_BUCKET
+# S3 bucket for profiler, benchmark results, and correctness results
+S3_BUCKET=$S3_BUCKET
 
-# OpenSearch build config (defaults — override as needed)
-# OPENSEARCH_REPO=https://github.com/opensearch-project/OpenSearch.git
-# OPENSEARCH_BRANCH=feature/datafusion
-# SQL_PLUGIN_REPO=https://github.com/bharath-techie/sql.git
-# SQL_PLUGIN_BRANCH=substrait-plan
+# DataFusion OpenSearch build config (defaults — override as needed)
+# DATAFUSION_REPO=https://github.com/opensearch-project/OpenSearch.git
+# DATAFUSION_BRANCH=feature/datafusion
+# DATAFUSION_SQL_REPO=https://github.com/bharath-techie/sql.git
+# DATAFUSION_SQL_BRANCH=substrait-plan
 
 # Instance config (defaults — override as needed)
 # INSTANCE_TYPE=r7g.2xlarge
@@ -287,6 +287,13 @@ S3_PROFILE_BUCKET=$S3_BUCKET
 # BENCHMARK_EBS_SIZE_GB=500
 # WORKLOAD_REPO=https://github.com/HarishNarasimhanK/opensearch-benchmark-workloads.git
 # WORKLOAD_BRANCH=main
+
+# Lucene OpenSearch config (defaults — override as needed)
+# LUCENE_ENABLED=true
+# LUCENE_REPO=https://github.com/opensearch-project/OpenSearch.git
+# LUCENE_BRANCH=3.6
+# LUCENE_SQL_REPO=https://github.com/opensearch-project/sql.git
+# LUCENE_SQL_BRANCH=3.6
 EOF
 
 echo "  ✅ Written to: $ENV_FILE"

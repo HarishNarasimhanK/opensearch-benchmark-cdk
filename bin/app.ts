@@ -19,29 +19,45 @@ dotenv.config();
 
 const app = new cdk.App();
 
+// --- AWS / Networking ---
 const account = process.env.CDK_ACCOUNT || process.env.CDK_DEFAULT_ACCOUNT;
 const region = process.env.CDK_REGION || process.env.CDK_DEFAULT_REGION || "us-east-1";
-const branch = process.env.OPENSEARCH_BRANCH || "feature/datafusion";
-const opensearchRepo = process.env.OPENSEARCH_REPO || "https://github.com/opensearch-project/OpenSearch.git";
 const vpcId = process.env.VPC_ID;
 const subnetId = process.env.SUBNET_ID;
 const subnetAz = process.env.SUBNET_AZ;
 const keyPairName = process.env.KEY_PAIR_NAME;
 const securityGroupId = process.env.SECURITY_GROUP_ID;
-const sqlPluginRepo = process.env.SQL_PLUGIN_REPO || "https://github.com/bharath-techie/sql.git";
-const sqlPluginBranch = process.env.SQL_PLUGIN_BRANCH || "substrait-plan";
 const stackSuffix = process.env.STACK_SUFFIX || "";
-const s3ProfileBucket = process.env.S3_PROFILE_BUCKET || "profiler-async";
+const s3ProfileBucket = process.env.S3_BUCKET || "opensearch-codeguru";
+
+// --- Instance config ---
 const instanceType = process.env.INSTANCE_TYPE || "r7g.2xlarge";
 const ebsSizeGb = parseInt(process.env.EBS_SIZE_GB || "100", 10);
 const ebsIops = parseInt(process.env.EBS_IOPS || "3000", 10);
 const ebsThroughput = parseInt(process.env.EBS_THROUGHPUT || "125", 10);
 const jvmHeap = process.env.JVM_HEAP || "8g";
+
+// --- DataFusion OpenSearch config ---
+const branch = app.node.tryGetContext("datafusionBranch") || process.env.DATAFUSION_BRANCH || "feature/datafusion";
+const opensearchRepo = app.node.tryGetContext("datafusionRepo") || process.env.DATAFUSION_REPO || "https://github.com/opensearch-project/OpenSearch.git";
+const sqlPluginRepo = process.env.DATAFUSION_SQL_REPO || "https://github.com/bharath-techie/sql.git";
+const sqlPluginBranch = process.env.DATAFUSION_SQL_BRANCH || "substrait-plan";
+
+// --- Lucene OpenSearch config ---
+const luceneEnabled = (process.env.LUCENE_ENABLED || "true").toLowerCase() === "true";
+const luceneRepo = process.env.LUCENE_REPO || "https://github.com/opensearch-project/OpenSearch.git";
+const luceneBranch = process.env.LUCENE_BRANCH || "3.6";
+const luceneSqlRepo = process.env.LUCENE_SQL_REPO || "https://github.com/opensearch-project/sql.git";
+const luceneSqlBranch = process.env.LUCENE_SQL_BRANCH || "3.6";
+
+// --- Benchmark config ---
 const benchmarkEnabled = (process.env.BENCHMARK_ENABLED || "true").toLowerCase() === "true";
 const benchmarkInstanceType = process.env.BENCHMARK_INSTANCE_TYPE || "m7g.medium";
 const benchmarkEbsSizeGb = parseInt(process.env.BENCHMARK_EBS_SIZE_GB || "500", 10);
 const workloadRepo = process.env.WORKLOAD_REPO || "https://github.com/HarishNarasimhanK/opensearch-benchmark-workloads.git";
 const workloadBranch = process.env.WORKLOAD_BRANCH || "main";
+
+// --- Stack name ---
 const stackName = stackSuffix
   ? `OpenSearchCodeGuruStack-${stackSuffix}`
   : "OpenSearchCodeGuruStack";
@@ -73,4 +89,9 @@ new OpenSearchCodeGuruStack(app, stackName, {
   benchmarkEbsSizeGb,
   workloadRepo,
   workloadBranch,
+  luceneEnabled,
+  luceneRepo,
+  luceneBranch,
+  luceneSqlRepo,
+  luceneSqlBranch,
 });

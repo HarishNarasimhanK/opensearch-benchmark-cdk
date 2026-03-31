@@ -27,13 +27,18 @@ interface OpenSearchCodeGuruStackProps extends cdk.StackProps {
   benchmarkEbsSizeGb: number;
   workloadRepo: string;
   workloadBranch: string;
+  luceneEnabled: boolean;
+  luceneRepo: string;
+  luceneBranch: string;
+  luceneSqlRepo: string;
+  luceneSqlBranch: string;
 }
 
 export class OpenSearchCodeGuruStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: OpenSearchCodeGuruStackProps) {
     super(scope, id, props);
 
-    const { branch, opensearchRepo, vpcId, subnetId, subnetAz, securityGroupId, keyPairName, sqlPluginRepo, sqlPluginBranch, stackSuffix, s3ProfileBucket, instanceType, ebsSizeGb, ebsIops, ebsThroughput, jvmHeap, benchmarkEnabled, benchmarkInstanceType, benchmarkEbsSizeGb, workloadRepo, workloadBranch } = props;
+    const { branch, opensearchRepo, vpcId, subnetId, subnetAz, securityGroupId, keyPairName, sqlPluginRepo, sqlPluginBranch, stackSuffix, s3ProfileBucket, instanceType, ebsSizeGb, ebsIops, ebsThroughput, jvmHeap, benchmarkEnabled, benchmarkInstanceType, benchmarkEbsSizeGb, workloadRepo, workloadBranch, luceneEnabled, luceneRepo, luceneBranch, luceneSqlRepo, luceneSqlBranch } = props;
 
     // Sanitize branch name for use in resource names (replace / with -)
     const safeBranch = branch.replace(/\//g, "-");
@@ -64,12 +69,10 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
     // --- Key Pair reference ---
     const keyPair = ec2.KeyPair.fromKeyPairName(this, "ExistingKeyPair", keyPairName);
 
-    // --- User Data: load from scripts/user-data.sh with placeholder substitution ---
-    const userDataScript = fs.readFileSync(path.join(__dirname, "..", "scripts", "user-data.sh"), "utf-8")
+    // --- DataFusion OpenSearch Instance ---
+    const userDataScript = fs.readFileSync(path.join(__dirname, "..", "scripts", "user-data-datafusion.sh"), "utf-8")
       .replace(/\{\{BRANCH\}\}/g, branch)
       .replace(/\{\{OPENSEARCH_REPO\}\}/g, opensearchRepo)
-      .replace(/\{\{SAFE_BRANCH\}\}/g, safeBranch)
-      .replace(/\{\{REGION\}\}/g, this.region)
       .replace(/\{\{SQL_PLUGIN_REPO\}\}/g, sqlPluginRepo)
       .replace(/\{\{SQL_PLUGIN_BRANCH\}\}/g, sqlPluginBranch)
       .replace(/\{\{S3_PROFILE_BUCKET\}\}/g, s3ProfileBucket)
@@ -78,7 +81,6 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
     const userData = ec2.UserData.forLinux();
     userData.addCommands(userDataScript);
 
-    // --- Launch Template (needed for EBS throughput support) ---
     const launchTemplate = new ec2.LaunchTemplate(this, "OpenSearchLaunchTemplate", {
       instanceType: new ec2.InstanceType(instanceType),
       machineImage: ec2.MachineImage.latestAmazonLinux2023({
@@ -100,7 +102,6 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
       ],
     });
 
-    // --- EC2 Instance ---
     const instance = new ec2.Instance(this, "OpenSearchInstance", {
       vpc,
       instanceType: new ec2.InstanceType(instanceType),
@@ -116,7 +117,6 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
       LaunchTemplateId: launchTemplate.launchTemplateId,
       Version: launchTemplate.latestVersionNumber,
     });
-    // Remove properties that come from the launch template
     cfnInstance.addPropertyDeletionOverride("SecurityGroupIds");
     cfnInstance.addPropertyDeletionOverride("UserData");
     cfnInstance.addPropertyDeletionOverride("IamInstanceProfile");
@@ -130,12 +130,71 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
       value: `ssh -i ${keyPairName}.pem ec2-user@${instance.instancePublicDnsName}`,
     });
 
+    // --- Lucene OpenSearch Instance (optional) ---
+    let lucenePrivateIp = "";
+    if (luceneEnabled) {
+      const luceneUserDataScript = fs.readFileSync(path.join(__dirname, "..", "scripts", "user-data-lucene.sh"), "utf-8")
+        .replace(/\{\{LUCENE_BRANCH\}\}/g, luceneBranch)
+        .replace(/\{\{LUCENE_REPO\}\}/g, luceneRepo)
+        .replace(/\{\{LUCENE_SQL_REPO\}\}/g, luceneSqlRepo)
+        .replace(/\{\{LUCENE_SQL_BRANCH\}\}/g, luceneSqlBranch)
+        .replace(/\{\{JVM_HEAP\}\}/g, jvmHeap)
+        .replace(/\{\{S3_PROFILE_BUCKET\}\}/g, s3ProfileBucket);
+
+      const luceneUserData = ec2.UserData.forLinux();
+      luceneUserData.addCommands(luceneUserDataScript);
+
+      const luceneLaunchTemplate = new ec2.LaunchTemplate(this, "LuceneLaunchTemplate", {
+        instanceType: new ec2.InstanceType(instanceType),
+        machineImage: ec2.MachineImage.latestAmazonLinux2023({ cpuType: ec2.AmazonLinuxCpuType.ARM_64 }),
+        securityGroup: sg,
+        instanceProfile,
+        userData: luceneUserData,
+        keyPair,
+        blockDevices: [{
+          deviceName: "/dev/xvda",
+          volume: ec2.BlockDeviceVolume.ebs(ebsSizeGb, {
+            volumeType: ec2.EbsDeviceVolumeType.GP3,
+            iops: ebsIops,
+            throughput: ebsThroughput,
+          }),
+        }],
+      });
+
+      const luceneInstance = new ec2.Instance(this, "LuceneInstance", {
+        vpc,
+        instanceType: new ec2.InstanceType(instanceType),
+        machineImage: ec2.MachineImage.latestAmazonLinux2023({ cpuType: ec2.AmazonLinuxCpuType.ARM_64 }),
+        vpcSubnets: { subnets: [subnet] },
+      });
+
+      const cfnLuceneInstance = luceneInstance.node.defaultChild as cdk.CfnResource;
+      cfnLuceneInstance.addPropertyOverride("LaunchTemplate", {
+        LaunchTemplateId: luceneLaunchTemplate.launchTemplateId,
+        Version: luceneLaunchTemplate.latestVersionNumber,
+      });
+      cfnLuceneInstance.addPropertyDeletionOverride("SecurityGroupIds");
+      cfnLuceneInstance.addPropertyDeletionOverride("UserData");
+      cfnLuceneInstance.addPropertyDeletionOverride("IamInstanceProfile");
+      cfnLuceneInstance.addPropertyDeletionOverride("KeyName");
+
+      lucenePrivateIp = luceneInstance.instancePrivateIp;
+
+      new cdk.CfnOutput(this, "LuceneInstanceId", { value: luceneInstance.instanceId });
+      new cdk.CfnOutput(this, "LucenePrivateIp", { value: luceneInstance.instancePrivateIp });
+      new cdk.CfnOutput(this, "LucenePublicDns", { value: luceneInstance.instancePublicDnsName });
+      new cdk.CfnOutput(this, "LuceneSSHCommand", {
+        value: `ssh -i ${keyPairName}.pem ec2-user@${luceneInstance.instancePublicDnsName}`,
+      });
+    }
+
     // --- Benchmark Instance (optional) ---
     if (benchmarkEnabled) {
       const benchmarkUserDataScript = fs.readFileSync(path.join(__dirname, "..", "scripts", "user-data-benchmark.sh"), "utf-8")
         .replace(/\{\{WORKLOAD_REPO\}\}/g, workloadRepo)
         .replace(/\{\{WORKLOAD_BRANCH\}\}/g, workloadBranch)
-        .replace(/\{\{OPENSEARCH_PRIVATE_IP\}\}/g, instance.instancePrivateIp)
+        .replace(/\{\{DATAFUSION_PRIVATE_IP\}\}/g, instance.instancePrivateIp)
+        .replace(/\{\{LUCENE_PRIVATE_IP\}\}/g, lucenePrivateIp)
         .replace(/\{\{S3_PROFILE_BUCKET\}\}/g, s3ProfileBucket);
 
       const benchmarkUserData = ec2.UserData.forLinux();
@@ -143,29 +202,21 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
 
       const benchmarkLaunchTemplate = new ec2.LaunchTemplate(this, "BenchmarkLaunchTemplate", {
         instanceType: new ec2.InstanceType(benchmarkInstanceType),
-        machineImage: ec2.MachineImage.latestAmazonLinux2023({
-          cpuType: ec2.AmazonLinuxCpuType.ARM_64,
-        }),
+        machineImage: ec2.MachineImage.latestAmazonLinux2023({ cpuType: ec2.AmazonLinuxCpuType.ARM_64 }),
         securityGroup: sg,
         instanceProfile,
         userData: benchmarkUserData,
         keyPair,
-        blockDevices: [
-          {
-            deviceName: "/dev/xvda",
-            volume: ec2.BlockDeviceVolume.ebs(benchmarkEbsSizeGb, {
-              volumeType: ec2.EbsDeviceVolumeType.GP3,
-            }),
-          },
-        ],
+        blockDevices: [{
+          deviceName: "/dev/xvda",
+          volume: ec2.BlockDeviceVolume.ebs(benchmarkEbsSizeGb, { volumeType: ec2.EbsDeviceVolumeType.GP3 }),
+        }],
       });
 
       const benchmarkInstance = new ec2.Instance(this, "BenchmarkInstance", {
         vpc,
         instanceType: new ec2.InstanceType(benchmarkInstanceType),
-        machineImage: ec2.MachineImage.latestAmazonLinux2023({
-          cpuType: ec2.AmazonLinuxCpuType.ARM_64,
-        }),
+        machineImage: ec2.MachineImage.latestAmazonLinux2023({ cpuType: ec2.AmazonLinuxCpuType.ARM_64 }),
         vpcSubnets: { subnets: [subnet] },
       });
 
