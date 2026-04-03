@@ -24,9 +24,9 @@ ENVEOF
 chown ec2-user:ec2-user /home/ec2-user/.opensearch-env
 
 # --- Step 4: Clone repos ---
-su -l ec2-user -c 'git clone https://github.com/HarishNarasimhanK/opensearch-test-automation.git /home/ec2-user/opensearch-test-automation'
+su -l ec2-user -c 'aws s3 cp {{SCRIPTS_S3_PATH}} /tmp/automation-scripts.zip && mkdir -p /home/ec2-user/opensearch-test-automation && cd /home/ec2-user/opensearch-test-automation && unzip -o /tmp/automation-scripts.zip && chmod +x /home/ec2-user/opensearch-test-automation/**/*.sh && rm /tmp/automation-scripts.zip'
 su -l ec2-user -c 'git clone -b {{WORKLOAD_BRANCH}} {{WORKLOAD_REPO}} /home/ec2-user/datafusion-workloads'
 su -l ec2-user -c 'git clone https://github.com/opensearch-project/opensearch-benchmark-workloads.git /home/ec2-user/lucene-workloads'
 
 # --- Step 5: Auto-run all benchmarks ---
-su -l ec2-user -c 'nohup bash /home/ec2-user/opensearch-test-automation/benchmark/run-all.sh > /home/ec2-user/benchmark-run.log 2>&1 &'
+su -l ec2-user -c 'nohup bash /home/ec2-user/opensearch-test-automation/run-all.sh > /home/ec2-user/benchmark-run.log 2>&1 &'

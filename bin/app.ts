@@ -27,7 +27,6 @@ const subnetId = process.env.SUBNET_ID;
 const subnetAz = process.env.SUBNET_AZ;
 const keyPairName = process.env.KEY_PAIR_NAME;
 const securityGroupId = process.env.SECURITY_GROUP_ID;
-const stackSuffix = process.env.STACK_SUFFIX || "";
 const s3ProfileBucket = process.env.S3_BUCKET || "opensearch-codeguru";
 
 // --- Instance config ---
@@ -43,12 +42,10 @@ const opensearchRepo = app.node.tryGetContext("datafusionRepo") || process.env.D
 const sqlPluginRepo = process.env.DATAFUSION_SQL_REPO || "https://github.com/bharath-techie/sql.git";
 const sqlPluginBranch = process.env.DATAFUSION_SQL_BRANCH || "substrait-plan";
 
-// --- Lucene OpenSearch config ---
+// --- Lucene OpenSearch config (no plugins — DSL queries only) ---
 const luceneEnabled = (process.env.LUCENE_ENABLED || "true").toLowerCase() === "true";
 const luceneRepo = process.env.LUCENE_REPO || "https://github.com/opensearch-project/OpenSearch.git";
-const luceneBranch = process.env.LUCENE_BRANCH || "3.6";
-const luceneSqlRepo = process.env.LUCENE_SQL_REPO || "https://github.com/opensearch-project/sql.git";
-const luceneSqlBranch = process.env.LUCENE_SQL_BRANCH || "3.6";
+const luceneBranch = process.env.LUCENE_BRANCH || "main";
 
 // --- Benchmark config ---
 const benchmarkEnabled = (process.env.BENCHMARK_ENABLED || "true").toLowerCase() === "true";
@@ -58,6 +55,7 @@ const workloadRepo = process.env.WORKLOAD_REPO || "https://github.com/HarishNara
 const workloadBranch = process.env.WORKLOAD_BRANCH || "main";
 
 // --- Stack name ---
+const stackSuffix = process.env.STACK_SUFFIX || "";
 const stackName = stackSuffix
   ? `OpenSearchCodeGuruStack-${stackSuffix}`
   : "OpenSearchCodeGuruStack";
@@ -77,7 +75,6 @@ new OpenSearchCodeGuruStack(app, stackName, {
   keyPairName,
   sqlPluginRepo,
   sqlPluginBranch,
-  stackSuffix,
   s3ProfileBucket,
   instanceType,
   ebsSizeGb,
@@ -92,6 +89,4 @@ new OpenSearchCodeGuruStack(app, stackName, {
   luceneEnabled,
   luceneRepo,
   luceneBranch,
-  luceneSqlRepo,
-  luceneSqlBranch,
 });

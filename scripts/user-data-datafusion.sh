@@ -7,14 +7,42 @@ exec > /var/log/user-data.log 2>&1
 # =============================================================================
 
 # --- Step 1: Install dependencies ---
-yum install -y git java-21-amazon-corretto-devel protobuf-compiler protobuf-devel rust cargo cmake cronie
+yum install -y git java-21-amazon-corretto-devel protobuf-compiler protobuf-devel rust cargo cmake cronie amazon-cloudwatch-agent
 yum groupinstall -y 'Development Tools'
 export JAVA_HOME=/usr/lib/jvm/java-21-amazon-corretto
 echo 'export JAVA_HOME=/usr/lib/jvm/java-21-amazon-corretto' >> /etc/profile.d/java.sh
 sysctl -w vm.max_map_count=262144
 echo 'vm.max_map_count=262144' >> /etc/sysctl.conf
 
-# --- Step 2: Clone and build OpenSearch ---
+# --- Step 2: Start CloudWatch agent early (streams user-data.log from the start) ---
+cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json << 'CWCONFIG'
+{
+  "metrics": {
+    "namespace": "OpenSearch/DataFusion",
+    "metrics_collected": {
+      "cpu": { "measurement": ["cpu_usage_idle", "cpu_usage_user", "cpu_usage_system"], "metrics_collection_interval": 10 },
+      "mem": { "measurement": ["mem_used_percent", "mem_available_percent"], "metrics_collection_interval": 10 },
+      "disk": { "measurement": ["disk_used_percent"], "resources": ["/"], "metrics_collection_interval": 60 },
+      "diskio": { "measurement": ["reads", "writes", "read_bytes", "write_bytes"], "metrics_collection_interval": 10 },
+      "net": { "measurement": ["bytes_sent", "bytes_recv"], "metrics_collection_interval": 10 }
+    },
+    "append_dimensions": { "InstanceId": "${aws:InstanceId}" }
+  },
+  "logs": {
+    "logs_collected": {
+      "files": {
+        "collect_list": [
+          { "file_path": "/var/log/user-data.log", "log_group_name": "/opensearch/datafusion/user-data", "log_stream_name": "{instance_id}" },
+          { "file_path": "/home/ec2-user/datafusion-opensearch-run.log", "log_group_name": "/opensearch/datafusion/runtime", "log_stream_name": "{instance_id}" }
+        ]
+      }
+    }
+  }
+}
+CWCONFIG
+/opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json -s
+
+# --- Step 3: Clone and build OpenSearch ---
 su -l ec2-user -c 'git clone --branch {{BRANCH}} {{OPENSEARCH_REPO}} /home/ec2-user/datafusion-opensearch-src'
 su -l ec2-user -c 'cd /home/ec2-user/datafusion-opensearch-src && ./gradlew publishToMavenLocal -x missingJavadoc'
 
@@ -68,7 +96,7 @@ S3_BUCKET={{S3_PROFILE_BUCKET}}
 ENVEOF
 chown ec2-user:ec2-user /home/ec2-user/.opensearch-env
 
-su -l ec2-user -c 'git clone https://github.com/HarishNarasimhanK/opensearch-test-automation.git /home/ec2-user/opensearch-test-automation'
+su -l ec2-user -c 'aws s3 cp {{SCRIPTS_S3_PATH}} /tmp/automation-scripts.zip && mkdir -p /home/ec2-user/opensearch-test-automation && cd /home/ec2-user/opensearch-test-automation && unzip -o /tmp/automation-scripts.zip && chmod +x /home/ec2-user/opensearch-test-automation/**/*.sh && rm /tmp/automation-scripts.zip'
 
 # --- Step 10: Install async-profiler ---
 su -l ec2-user -c 'mkdir -p /home/ec2-user/async-profiler'

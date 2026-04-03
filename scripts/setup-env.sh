@@ -291,9 +291,7 @@ S3_BUCKET=$S3_BUCKET
 # Lucene OpenSearch config (defaults — override as needed)
 # LUCENE_ENABLED=true
 # LUCENE_REPO=https://github.com/opensearch-project/OpenSearch.git
-# LUCENE_BRANCH=3.6
-# LUCENE_SQL_REPO=https://github.com/opensearch-project/sql.git
-# LUCENE_SQL_BRANCH=3.6
+# LUCENE_BRANCH=main
 EOF
 
 echo "  ✅ Written to: $ENV_FILE"
