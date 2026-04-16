@@ -64,144 +64,119 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
       path: path.join(__dirname, "..", "opensearch-test-automation"),
       exclude: [".git", ".git/**"],
     });
+    scriptsAsset.grantRead(role);
     const scriptsS3Path = `s3://${scriptsAsset.s3BucketName}/${scriptsAsset.s3ObjectKey}`;
 
-    // --- DataFusion OpenSearch Instance ---
-    const userDataScript = fs.readFileSync(path.join(__dirname, "..", "scripts", "user-data-datafusion.sh"), "utf-8")
+    // --- Helper: create an instance with a launch template ---
+    const createInstance = (nodeId: string, ltId: string, userDataScript: string, instType: string, ebsSize: number, ebsIopsVal?: number, ebsThroughputVal?: number): ec2.Instance => {
+      const ud = ec2.UserData.forLinux();
+      ud.addCommands(userDataScript);
+
+      const ltProps: ec2.LaunchTemplateProps = {
+        instanceType: new ec2.InstanceType(instType),
+        machineImage: ec2.MachineImage.latestAmazonLinux2023({ cpuType: ec2.AmazonLinuxCpuType.ARM_64 }),
+        securityGroup: sg, instanceProfile, userData: ud, keyPair,
+        blockDevices: [{
+          deviceName: "/dev/xvda",
+          volume: ec2.BlockDeviceVolume.ebs(ebsSize, {
+            volumeType: ec2.EbsDeviceVolumeType.GP3,
+            ...(ebsIopsVal ? { iops: ebsIopsVal } : {}),
+            ...(ebsThroughputVal ? { throughput: ebsThroughputVal } : {}),
+          }),
+        }],
+      };
+
+      const lt = new ec2.LaunchTemplate(this, ltId, ltProps);
+
+      const inst = new ec2.Instance(this, nodeId, {
+        vpc, instanceType: new ec2.InstanceType(instType),
+        machineImage: ec2.MachineImage.latestAmazonLinux2023({ cpuType: ec2.AmazonLinuxCpuType.ARM_64 }),
+        vpcSubnets: { subnets: [subnet] },
+      });
+
+      const cfn = inst.node.defaultChild as cdk.CfnResource;
+      cfn.addPropertyOverride("LaunchTemplate", { LaunchTemplateId: lt.launchTemplateId, Version: lt.latestVersionNumber });
+      cfn.addPropertyOverride("DisableApiTermination", false);
+      cfn.addPropertyDeletionOverride("SecurityGroupIds");
+      cfn.addPropertyDeletionOverride("UserData");
+      cfn.addPropertyDeletionOverride("IamInstanceProfile");
+      cfn.addPropertyDeletionOverride("KeyName");
+
+      return inst;
+    };
+
+    // =========================================================================
+    // Builder Instance — builds both DataFusion and Lucene, uploads tar.gz to S3
+    // =========================================================================
+    const builderScript = fs.readFileSync(path.join(__dirname, "..", "scripts", "user-data-builder.sh"), "utf-8")
       .replace(/\{\{BRANCH\}\}/g, branch)
       .replace(/\{\{OPENSEARCH_REPO\}\}/g, opensearchRepo)
       .replace(/\{\{SQL_PLUGIN_REPO\}\}/g, sqlPluginRepo)
       .replace(/\{\{SQL_PLUGIN_BRANCH\}\}/g, sqlPluginBranch)
+      .replace(/\{\{LUCENE_BRANCH\}\}/g, luceneBranch)
+      .replace(/\{\{LUCENE_REPO\}\}/g, luceneRepo)
+      .replace(/\{\{S3_PROFILE_BUCKET\}\}/g, s3ProfileBucket);
+
+    const builderInstance = createInstance("BuilderInstance", "BuilderLaunchTemplate", builderScript, instanceType, ebsSizeGb, ebsIops, ebsThroughput);
+
+    new cdk.CfnOutput(this, "A1BuilderSSH", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${builderInstance.instancePublicDnsName}` });
+    new cdk.CfnOutput(this, "A2BuilderLog", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${builderInstance.instancePublicDnsName} "tail -f /var/log/user-data.log"` });
+    new cdk.CfnOutput(this, "A3BuilderInstanceId", { value: builderInstance.instanceId });
+
+    // =========================================================================
+    // DataFusion OpenSearch Instance — downloads pre-built tar.gz, starts OpenSearch
+    // =========================================================================
+    const datafusionScript = fs.readFileSync(path.join(__dirname, "..", "scripts", "user-data-datafusion.sh"), "utf-8")
       .replace(/\{\{S3_PROFILE_BUCKET\}\}/g, s3ProfileBucket)
       .replace(/\{\{JVM_HEAP\}\}/g, jvmHeap)
       .replace(/\{\{SCRIPTS_S3_PATH\}\}/g, scriptsS3Path);
 
-    const userData = ec2.UserData.forLinux();
-    userData.addCommands(userDataScript);
+    const datafusionInstance = createInstance("OpenSearchInstance", "OpenSearchLaunchTemplate", datafusionScript, instanceType, ebsSizeGb, ebsIops, ebsThroughput);
 
-    const launchTemplate = new ec2.LaunchTemplate(this, "OpenSearchLaunchTemplate", {
-      instanceType: new ec2.InstanceType(instanceType),
-      machineImage: ec2.MachineImage.latestAmazonLinux2023({ cpuType: ec2.AmazonLinuxCpuType.ARM_64 }),
-      securityGroup: sg, instanceProfile, userData, keyPair,
-      blockDevices: [{
-        deviceName: "/dev/xvda",
-        volume: ec2.BlockDeviceVolume.ebs(ebsSizeGb, {
-          volumeType: ec2.EbsDeviceVolumeType.GP3, iops: ebsIops, throughput: ebsThroughput,
-        }),
-      }],
-    });
+    new cdk.CfnOutput(this, "B1DataFusionSSH", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${datafusionInstance.instancePublicDnsName}` });
+    new cdk.CfnOutput(this, "B2DataFusionSetupLog", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${datafusionInstance.instancePublicDnsName} "tail -f /var/log/user-data.log"` });
+    new cdk.CfnOutput(this, "B3DataFusionRuntimeLog", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${datafusionInstance.instancePublicDnsName} "tail -f ~/datafusion-opensearch-run.log"` });
+    new cdk.CfnOutput(this, "B4DataFusionInstanceId", { value: datafusionInstance.instanceId });
+    new cdk.CfnOutput(this, "B5DataFusionPrivateIp", { value: datafusionInstance.instancePrivateIp });
 
-    const instance = new ec2.Instance(this, "OpenSearchInstance", {
-      vpc, instanceType: new ec2.InstanceType(instanceType),
-      machineImage: ec2.MachineImage.latestAmazonLinux2023({ cpuType: ec2.AmazonLinuxCpuType.ARM_64 }),
-      vpcSubnets: { subnets: [subnet] },
-    });
-
-    const cfnInstance = instance.node.defaultChild as cdk.CfnResource;
-    cfnInstance.addPropertyOverride("LaunchTemplate", {
-      LaunchTemplateId: launchTemplate.launchTemplateId, Version: launchTemplate.latestVersionNumber,
-    });
-    cfnInstance.addPropertyDeletionOverride("SecurityGroupIds");
-    cfnInstance.addPropertyDeletionOverride("UserData");
-    cfnInstance.addPropertyDeletionOverride("IamInstanceProfile");
-    cfnInstance.addPropertyDeletionOverride("KeyName");
-
-    new cdk.CfnOutput(this, "InstanceId", { value: instance.instanceId });
-    new cdk.CfnOutput(this, "PrivateIp", { value: instance.instancePrivateIp });
-    new cdk.CfnOutput(this, "PublicDns", { value: instance.instancePublicDnsName });
-    new cdk.CfnOutput(this, "SSHCommand", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${instance.instancePublicDnsName}` });
-    new cdk.CfnOutput(this, "DataFusionBuildLog", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${instance.instancePublicDnsName} "tail -f /var/log/user-data.log"` });
-    new cdk.CfnOutput(this, "DataFusionRuntimeLog", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${instance.instancePublicDnsName} "tail -f ~/datafusion-opensearch-run.log"` });
-
-    // --- Lucene OpenSearch Instance (optional) ---
+    // =========================================================================
+    // Lucene OpenSearch Instance (optional) — downloads pre-built tar.gz, starts OpenSearch
+    // =========================================================================
     let lucenePrivateIp = "";
     if (luceneEnabled) {
-      const luceneUserDataScript = fs.readFileSync(path.join(__dirname, "..", "scripts", "user-data-lucene.sh"), "utf-8")
-        .replace(/\{\{LUCENE_BRANCH\}\}/g, luceneBranch)
-        .replace(/\{\{LUCENE_REPO\}\}/g, luceneRepo)
-        .replace(/\{\{JVM_HEAP\}\}/g, jvmHeap)
+      const luceneScript = fs.readFileSync(path.join(__dirname, "..", "scripts", "user-data-lucene.sh"), "utf-8")
         .replace(/\{\{S3_PROFILE_BUCKET\}\}/g, s3ProfileBucket)
+        .replace(/\{\{JVM_HEAP\}\}/g, jvmHeap)
         .replace(/\{\{SCRIPTS_S3_PATH\}\}/g, scriptsS3Path);
 
-      const luceneUserData = ec2.UserData.forLinux();
-      luceneUserData.addCommands(luceneUserDataScript);
-
-      const luceneLaunchTemplate = new ec2.LaunchTemplate(this, "LuceneLaunchTemplate", {
-        instanceType: new ec2.InstanceType(instanceType),
-        machineImage: ec2.MachineImage.latestAmazonLinux2023({ cpuType: ec2.AmazonLinuxCpuType.ARM_64 }),
-        securityGroup: sg, instanceProfile, userData: luceneUserData, keyPair,
-        blockDevices: [{
-          deviceName: "/dev/xvda",
-          volume: ec2.BlockDeviceVolume.ebs(ebsSizeGb, {
-            volumeType: ec2.EbsDeviceVolumeType.GP3, iops: ebsIops, throughput: ebsThroughput,
-          }),
-        }],
-      });
-
-      const luceneInstance = new ec2.Instance(this, "LuceneInstance", {
-        vpc, instanceType: new ec2.InstanceType(instanceType),
-        machineImage: ec2.MachineImage.latestAmazonLinux2023({ cpuType: ec2.AmazonLinuxCpuType.ARM_64 }),
-        vpcSubnets: { subnets: [subnet] },
-      });
-
-      const cfnLuceneInstance = luceneInstance.node.defaultChild as cdk.CfnResource;
-      cfnLuceneInstance.addPropertyOverride("LaunchTemplate", { LaunchTemplateId: luceneLaunchTemplate.launchTemplateId, Version: luceneLaunchTemplate.latestVersionNumber });
-      cfnLuceneInstance.addPropertyDeletionOverride("SecurityGroupIds");
-      cfnLuceneInstance.addPropertyDeletionOverride("UserData");
-      cfnLuceneInstance.addPropertyDeletionOverride("IamInstanceProfile");
-      cfnLuceneInstance.addPropertyDeletionOverride("KeyName");
-
+      const luceneInstance = createInstance("LuceneInstance", "LuceneLaunchTemplate", luceneScript, instanceType, ebsSizeGb, ebsIops, ebsThroughput);
       lucenePrivateIp = luceneInstance.instancePrivateIp;
 
-      new cdk.CfnOutput(this, "LuceneInstanceId", { value: luceneInstance.instanceId });
-      new cdk.CfnOutput(this, "LucenePrivateIp", { value: luceneInstance.instancePrivateIp });
-      new cdk.CfnOutput(this, "LucenePublicDns", { value: luceneInstance.instancePublicDnsName });
-      new cdk.CfnOutput(this, "LuceneSSHCommand", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${luceneInstance.instancePublicDnsName}` });
-      new cdk.CfnOutput(this, "LuceneBuildLog", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${luceneInstance.instancePublicDnsName} "tail -f /var/log/user-data.log"` });
-      new cdk.CfnOutput(this, "LuceneRuntimeLog", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${luceneInstance.instancePublicDnsName} "tail -f ~/lucene-opensearch-run.log"` });
+      new cdk.CfnOutput(this, "C1LuceneSSH", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${luceneInstance.instancePublicDnsName}` });
+      new cdk.CfnOutput(this, "C2LuceneSetupLog", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${luceneInstance.instancePublicDnsName} "tail -f /var/log/user-data.log"` });
+      new cdk.CfnOutput(this, "C3LuceneRuntimeLog", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${luceneInstance.instancePublicDnsName} "tail -f ~/lucene-opensearch-run.log"` });
+      new cdk.CfnOutput(this, "C4LuceneInstanceId", { value: luceneInstance.instanceId });
+      new cdk.CfnOutput(this, "C5LucenePrivateIp", { value: luceneInstance.instancePrivateIp });
     }
 
-    // --- Benchmark Instance (optional) ---
+    // =========================================================================
+    // Benchmark Instance (optional) — runs OSB + correctness tests
+    // =========================================================================
     if (benchmarkEnabled) {
-      const benchmarkUserDataScript = fs.readFileSync(path.join(__dirname, "..", "scripts", "user-data-benchmark.sh"), "utf-8")
+      const benchmarkScript = fs.readFileSync(path.join(__dirname, "..", "scripts", "user-data-benchmark.sh"), "utf-8")
         .replace(/\{\{WORKLOAD_REPO\}\}/g, workloadRepo)
         .replace(/\{\{WORKLOAD_BRANCH\}\}/g, workloadBranch)
-        .replace(/\{\{DATAFUSION_PRIVATE_IP\}\}/g, instance.instancePrivateIp)
+        .replace(/\{\{DATAFUSION_PRIVATE_IP\}\}/g, datafusionInstance.instancePrivateIp)
         .replace(/\{\{LUCENE_PRIVATE_IP\}\}/g, lucenePrivateIp)
         .replace(/\{\{S3_PROFILE_BUCKET\}\}/g, s3ProfileBucket)
         .replace(/\{\{SCRIPTS_S3_PATH\}\}/g, scriptsS3Path);
 
-      const benchmarkUserData = ec2.UserData.forLinux();
-      benchmarkUserData.addCommands(benchmarkUserDataScript);
+      const benchmarkInstance = createInstance("BenchmarkInstance", "BenchmarkLaunchTemplate", benchmarkScript, benchmarkInstanceType, benchmarkEbsSizeGb);
 
-      const benchmarkLaunchTemplate = new ec2.LaunchTemplate(this, "BenchmarkLaunchTemplate", {
-        instanceType: new ec2.InstanceType(benchmarkInstanceType),
-        machineImage: ec2.MachineImage.latestAmazonLinux2023({ cpuType: ec2.AmazonLinuxCpuType.ARM_64 }),
-        securityGroup: sg, instanceProfile, userData: benchmarkUserData, keyPair,
-        blockDevices: [{
-          deviceName: "/dev/xvda",
-          volume: ec2.BlockDeviceVolume.ebs(benchmarkEbsSizeGb, { volumeType: ec2.EbsDeviceVolumeType.GP3 }),
-        }],
-      });
-
-      const benchmarkInstance = new ec2.Instance(this, "BenchmarkInstance", {
-        vpc, instanceType: new ec2.InstanceType(benchmarkInstanceType),
-        machineImage: ec2.MachineImage.latestAmazonLinux2023({ cpuType: ec2.AmazonLinuxCpuType.ARM_64 }),
-        vpcSubnets: { subnets: [subnet] },
-      });
-
-      const cfnBenchmarkInstance = benchmarkInstance.node.defaultChild as cdk.CfnResource;
-      cfnBenchmarkInstance.addPropertyOverride("LaunchTemplate", { LaunchTemplateId: benchmarkLaunchTemplate.launchTemplateId, Version: benchmarkLaunchTemplate.latestVersionNumber });
-      cfnBenchmarkInstance.addPropertyDeletionOverride("SecurityGroupIds");
-      cfnBenchmarkInstance.addPropertyDeletionOverride("UserData");
-      cfnBenchmarkInstance.addPropertyDeletionOverride("KeyName");
-      cfnBenchmarkInstance.addPropertyDeletionOverride("IamInstanceProfile");
-
-      new cdk.CfnOutput(this, "BenchmarkInstanceId", { value: benchmarkInstance.instanceId });
-      new cdk.CfnOutput(this, "BenchmarkPublicDns", { value: benchmarkInstance.instancePublicDnsName });
-      new cdk.CfnOutput(this, "BenchmarkSSHCommand", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${benchmarkInstance.instancePublicDnsName}` });
-      new cdk.CfnOutput(this, "BenchmarkSetupLog", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${benchmarkInstance.instancePublicDnsName} "tail -f /var/log/user-data.log"` });
-      new cdk.CfnOutput(this, "BenchmarkRunLog", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${benchmarkInstance.instancePublicDnsName} "tail -f ~/benchmark-run.log"` });
+      new cdk.CfnOutput(this, "D1BenchmarkSSH", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${benchmarkInstance.instancePublicDnsName}` });
+      new cdk.CfnOutput(this, "D2BenchmarkSetupLog", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${benchmarkInstance.instancePublicDnsName} "tail -f /var/log/user-data.log"` });
+      new cdk.CfnOutput(this, "D3BenchmarkRunLog", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${benchmarkInstance.instancePublicDnsName} "tail -f ~/benchmark-run.log"` });
+      new cdk.CfnOutput(this, "D4BenchmarkInstanceId", { value: benchmarkInstance.instanceId });
     }
   }
 }

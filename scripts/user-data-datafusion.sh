@@ -3,18 +3,20 @@ set -exo pipefail
 exec > /var/log/user-data.log 2>&1
 
 # =============================================================================
-# user-data-datafusion.sh — Builds OpenSearch with DataFusion engine from source
+# user-data-datafusion.sh — Downloads pre-built DataFusion OpenSearch from S3,
+# configures it, and starts it. No build needed — the builder instance handles that.
 # =============================================================================
 
-# --- Step 1: Install dependencies ---
-yum install -y git java-21-amazon-corretto-devel protobuf-compiler protobuf-devel rust cargo cmake cronie amazon-cloudwatch-agent
-yum groupinstall -y 'Development Tools'
+S3_BUCKET="{{S3_PROFILE_BUCKET}}"
+
+# --- Step 1: Install minimal dependencies (no build tools needed) ---
+yum install -y java-21-amazon-corretto-devel cronie amazon-cloudwatch-agent
 export JAVA_HOME=/usr/lib/jvm/java-21-amazon-corretto
 echo 'export JAVA_HOME=/usr/lib/jvm/java-21-amazon-corretto' >> /etc/profile.d/java.sh
 sysctl -w vm.max_map_count=262144
 echo 'vm.max_map_count=262144' >> /etc/sysctl.conf
 
-# --- Step 2: Start CloudWatch agent early (streams user-data.log from the start) ---
+# --- Step 2: Start CloudWatch agent early ---
 cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json << 'CWCONFIG'
 {
   "metrics": {
@@ -42,54 +44,39 @@ cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json << 'CWCO
 CWCONFIG
 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json -s
 
-# --- Step 3: Clone and build OpenSearch ---
-su -l ec2-user -c 'git clone --branch {{BRANCH}} {{OPENSEARCH_REPO}} /home/ec2-user/datafusion-opensearch-src'
-su -l ec2-user -c 'cd /home/ec2-user/datafusion-opensearch-src && ./gradlew publishToMavenLocal -x missingJavadoc'
-
-# --- Step 3: Clone and build SQL plugin ---
-su -l ec2-user -c 'git clone --branch {{SQL_PLUGIN_BRANCH}} {{SQL_PLUGIN_REPO}} /home/ec2-user/datafusion-sql-plugin'
-su -l ec2-user -c 'cd /home/ec2-user/datafusion-sql-plugin && ./gradlew publishToMavenLocal'
-
-# --- Step 4: Build local distribution ---
-su -l ec2-user -c 'cd /home/ec2-user/datafusion-opensearch-src && ./gradlew localDistro -x missingJavadoc'
-
-# --- Step 5: Extract the local distribution ---
-su -l ec2-user -c 'mkdir -p /home/ec2-user/datafusion-opensearch && cp -r /home/ec2-user/datafusion-opensearch-src/build/distribution/local/opensearch-*/* /home/ec2-user/datafusion-opensearch/'
-
-# --- Step 6: Build and install plugins ---
-su -l ec2-user -c 'cd /home/ec2-user/datafusion-opensearch-src && ./gradlew :plugins:engine-datafusion:bundlePlugin :sandbox:plugins:analytics-engine:bundlePlugin -x missingJavadoc'
-su -l ec2-user -c '/home/ec2-user/datafusion-opensearch/bin/opensearch-plugin install --batch org.opensearch.plugin:opensearch-job-scheduler:3.3.0.0'
-su -l ec2-user -c '/home/ec2-user/datafusion-opensearch/bin/opensearch-plugin install --batch file:///home/ec2-user/datafusion-sql-plugin/plugin/build/distributions/opensearch-sql-3.3.0.0-SNAPSHOT.zip'
-su -l ec2-user -c '/home/ec2-user/datafusion-opensearch/bin/opensearch-plugin install --batch file:///home/ec2-user/datafusion-opensearch-src/sandbox/plugins/analytics-engine/build/distributions/analytics-engine-3.3.0-SNAPSHOT.zip'
-# Remove duplicate jars from already-installed plugins to avoid jar hell
-su -l ec2-user -c '
-PLUGIN_DIR=/home/ec2-user/datafusion-opensearch/plugins
-NEW_ZIP=/home/ec2-user/datafusion-opensearch-src/plugins/engine-datafusion/build/distributions/engine-datafusion-3.3.0-SNAPSHOT.zip
-NEW_JARS=$(unzip -l "$NEW_ZIP" | grep "\.jar$" | awk "{print \$NF}" | xargs -I{} basename {})
-for jar in $NEW_JARS; do
-  found=$(find "$PLUGIN_DIR" -name "$jar" 2>/dev/null)
-  if [ -n "$found" ]; then
-    echo "Removing duplicate jar to avoid jar hell: $found"
-    rm -f $found
+# --- Step 3: Wait for builder to finish and upload tar.gz ---
+echo "Waiting for DataFusion build to be available in S3..."
+for i in $(seq 1 120); do
+  if su -l ec2-user -c "aws s3 ls s3://${S3_BUCKET}/builds/opensearch-datafusion.tar.gz" 2>/dev/null; then
+    echo "DataFusion tar.gz found in S3!"
+    break
   fi
+  if [ $i -eq 120 ]; then echo "Timed out waiting for DataFusion build after 60 minutes"; exit 1; fi
+  echo "  Build not ready yet (attempt $i/120)..."
+  sleep 30
 done
-'
-su -l ec2-user -c '/home/ec2-user/datafusion-opensearch/bin/opensearch-plugin install --batch file:///home/ec2-user/datafusion-opensearch-src/plugins/engine-datafusion/build/distributions/engine-datafusion-3.3.0-SNAPSHOT.zip'
 
-# --- Step 7: Configure OpenSearch ---
+# --- Step 4: Download and extract pre-built OpenSearch ---
+echo "Downloading DataFusion OpenSearch from S3..."
+su -l ec2-user -c "aws s3 cp s3://${S3_BUCKET}/builds/opensearch-datafusion.tar.gz /tmp/opensearch-datafusion.tar.gz"
+su -l ec2-user -c 'mkdir -p /home/ec2-user/datafusion-opensearch && tar xzf /tmp/opensearch-datafusion.tar.gz -C /home/ec2-user/datafusion-opensearch'
+rm -f /tmp/opensearch-datafusion.tar.gz
+echo "OpenSearch extracted to ~/datafusion-opensearch"
+
+# --- Step 5: Configure OpenSearch ---
 cat > /home/ec2-user/datafusion-opensearch/config/opensearch.yml << 'EOF'
 node.name: node-1
 cluster.name: datafusion-cluster
-network.host: 0.0.0.0
-cluster.initial_cluster_manager_nodes: ["node-1"]
+network.host: _site_
+discovery.type: single-node
 EOF
 chown ec2-user:ec2-user /home/ec2-user/datafusion-opensearch/config/opensearch.yml
 
-# --- Step 8: Configure JVM heap ---
+# --- Step 6: Configure JVM heap ---
 sed -i 's/^-Xms.*/-Xms{{JVM_HEAP}}/' /home/ec2-user/datafusion-opensearch/config/jvm.options
 sed -i 's/^-Xmx.*/-Xmx{{JVM_HEAP}}/' /home/ec2-user/datafusion-opensearch/config/jvm.options
 
-# --- Step 9: Write env file and clone automation scripts ---
+# --- Step 7: Write env file and download automation scripts ---
 cat > /home/ec2-user/.opensearch-env << 'ENVEOF'
 ENGINE=datafusion
 S3_BUCKET={{S3_PROFILE_BUCKET}}
@@ -98,12 +85,12 @@ chown ec2-user:ec2-user /home/ec2-user/.opensearch-env
 
 su -l ec2-user -c 'aws s3 cp {{SCRIPTS_S3_PATH}} /tmp/automation-scripts.zip && mkdir -p /home/ec2-user/opensearch-test-automation && cd /home/ec2-user/opensearch-test-automation && unzip -o /tmp/automation-scripts.zip && chmod +x /home/ec2-user/opensearch-test-automation/**/*.sh && rm /tmp/automation-scripts.zip'
 
-# --- Step 10: Install async-profiler ---
+# --- Step 8: Install async-profiler ---
 su -l ec2-user -c 'mkdir -p /home/ec2-user/async-profiler'
 su -l ec2-user -c 'curl -L -o /home/ec2-user/async-profiler/async-profiler.tar.gz https://github.com/async-profiler/async-profiler/releases/download/v3.0/async-profiler-3.0-linux-arm64.tar.gz'
 su -l ec2-user -c 'tar xzf /home/ec2-user/async-profiler/async-profiler.tar.gz -C /home/ec2-user/async-profiler --strip-components=1'
 
-# --- Step 11: Setup cron and logrotate ---
+# --- Step 9: Setup cron and logrotate ---
 systemctl enable crond
 systemctl start crond
 echo '*/5 * * * * /home/ec2-user/opensearch-test-automation/profiler/profile-opensearch.sh >> /home/ec2-user/profile-cron.log 2>&1' | crontab -u ec2-user -
@@ -122,5 +109,6 @@ cat > /etc/logrotate.d/opensearch-profiler << 'LOGROTATE'
 }
 LOGROTATE
 
-# --- Step 12: Start OpenSearch ---
+# --- Step 10: Start OpenSearch ---
 su -l ec2-user -c 'nohup /home/ec2-user/datafusion-opensearch/bin/opensearch > /home/ec2-user/datafusion-opensearch-run.log 2>&1 &'
+echo "OpenSearch started! Waiting for it to be ready..."

@@ -3,21 +3,20 @@ set -exo pipefail
 exec > /var/log/user-data.log 2>&1
 
 # =============================================================================
-# user-data-lucene.sh — Builds vanilla Lucene OpenSearch from source (no plugins)
-#
-# DSL queries go directly to /_search — no SQL plugin needed.
-# This keeps the setup simple and avoids version mismatch issues.
+# user-data-lucene.sh — Downloads pre-built Lucene OpenSearch from S3,
+# configures it, and starts it. No plugins, DSL queries only.
 # =============================================================================
 
-# --- Step 1: Install dependencies ---
-yum install -y git java-21-amazon-corretto-devel cronie amazon-cloudwatch-agent
-yum groupinstall -y 'Development Tools'
+S3_BUCKET="{{S3_PROFILE_BUCKET}}"
+
+# --- Step 1: Install minimal dependencies ---
+yum install -y java-21-amazon-corretto-devel cronie amazon-cloudwatch-agent
 export JAVA_HOME=/usr/lib/jvm/java-21-amazon-corretto
 echo 'export JAVA_HOME=/usr/lib/jvm/java-21-amazon-corretto' >> /etc/profile.d/java.sh
 sysctl -w vm.max_map_count=262144
 echo 'vm.max_map_count=262144' >> /etc/sysctl.conf
 
-# --- Step 2: Start CloudWatch agent early (streams user-data.log from the start) ---
+# --- Step 2: Start CloudWatch agent early ---
 cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json << 'CWCONFIG'
 {
   "metrics": {
@@ -45,21 +44,31 @@ cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json << 'CWCO
 CWCONFIG
 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json -s
 
-# --- Step 2: Clone and build OpenSearch ---
-su -l ec2-user -c 'git clone --branch {{LUCENE_BRANCH}} {{LUCENE_REPO}} /home/ec2-user/lucene-opensearch-src'
+# --- Step 3: Wait for builder to finish and upload tar.gz ---
+echo "Waiting for Lucene build to be available in S3..."
+for i in $(seq 1 120); do
+  if su -l ec2-user -c "aws s3 ls s3://${S3_BUCKET}/builds/opensearch-lucene.tar.gz" 2>/dev/null; then
+    echo "Lucene tar.gz found in S3!"
+    break
+  fi
+  if [ $i -eq 120 ]; then echo "Timed out waiting for Lucene build after 60 minutes"; exit 1; fi
+  echo "  Build not ready yet (attempt $i/120)..."
+  sleep 30
+done
 
-# --- Step 3: Build local distribution (no publishToMavenLocal needed — no plugins to build) ---
-su -l ec2-user -c 'cd /home/ec2-user/lucene-opensearch-src && ./gradlew localDistro -x missingJavadoc'
-
-# --- Step 4: Extract the local distribution ---
-su -l ec2-user -c 'mkdir -p /home/ec2-user/lucene-opensearch && cp -r /home/ec2-user/lucene-opensearch-src/build/distribution/local/opensearch-*/* /home/ec2-user/lucene-opensearch/'
+# --- Step 4: Download and extract pre-built OpenSearch ---
+echo "Downloading Lucene OpenSearch from S3..."
+su -l ec2-user -c "aws s3 cp s3://${S3_BUCKET}/builds/opensearch-lucene.tar.gz /tmp/opensearch-lucene.tar.gz"
+su -l ec2-user -c 'mkdir -p /home/ec2-user/lucene-opensearch && tar xzf /tmp/opensearch-lucene.tar.gz -C /home/ec2-user/lucene-opensearch'
+rm -f /tmp/opensearch-lucene.tar.gz
+echo "OpenSearch extracted to ~/lucene-opensearch"
 
 # --- Step 5: Configure OpenSearch ---
 cat > /home/ec2-user/lucene-opensearch/config/opensearch.yml << 'EOF'
 node.name: node-1
 cluster.name: lucene-cluster
-network.host: 0.0.0.0
-cluster.initial_cluster_manager_nodes: ["node-1"]
+network.host: _site_
+discovery.type: single-node
 EOF
 chown ec2-user:ec2-user /home/ec2-user/lucene-opensearch/config/opensearch.yml
 
@@ -67,7 +76,7 @@ chown ec2-user:ec2-user /home/ec2-user/lucene-opensearch/config/opensearch.yml
 sed -i 's/^-Xms.*/-Xms{{JVM_HEAP}}/' /home/ec2-user/lucene-opensearch/config/jvm.options
 sed -i 's/^-Xmx.*/-Xmx{{JVM_HEAP}}/' /home/ec2-user/lucene-opensearch/config/jvm.options
 
-# --- Step 7: Write env file and clone automation scripts ---
+# --- Step 7: Write env file and download automation scripts ---
 cat > /home/ec2-user/.opensearch-env << 'ENVEOF'
 ENGINE=lucene
 S3_BUCKET={{S3_PROFILE_BUCKET}}
@@ -102,3 +111,4 @@ LOGROTATE
 
 # --- Step 10: Start OpenSearch ---
 su -l ec2-user -c 'nohup /home/ec2-user/lucene-opensearch/bin/opensearch > /home/ec2-user/lucene-opensearch-run.log 2>&1 &'
+echo "OpenSearch started! Waiting for it to be ready..."

@@ -7,7 +7,24 @@ exec > /var/log/user-data.log 2>&1
 # =============================================================================
 
 # --- Step 1: Install dependencies ---
-yum install -y python3-pip git
+yum install -y python3-pip git amazon-cloudwatch-agent
+
+# --- Step 1b: Start CloudWatch agent (streams logs to CloudWatch) ---
+cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json << 'CWCONFIG'
+{
+  "logs": {
+    "logs_collected": {
+      "files": {
+        "collect_list": [
+          { "file_path": "/var/log/user-data.log", "log_group_name": "/opensearch/benchmark/user-data", "log_stream_name": "{instance_id}" },
+          { "file_path": "/home/ec2-user/benchmark-run.log", "log_group_name": "/opensearch/benchmark/run", "log_stream_name": "{instance_id}" }
+        ]
+      }
+    }
+  }
+}
+CWCONFIG
+/opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json -s
 
 # --- Step 2: Install OpenSearch Benchmark ---
 su -l ec2-user -c 'pip3 install opensearch-benchmark --user'
