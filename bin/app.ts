@@ -47,6 +47,10 @@ const luceneEnabled = (process.env.LUCENE_ENABLED || "true").toLowerCase() === "
 const luceneRepo = process.env.LUCENE_REPO || "https://github.com/opensearch-project/OpenSearch.git";
 const luceneBranch = process.env.LUCENE_BRANCH || "main";
 
+// --- Cluster config ---
+const clusterMode = app.node.tryGetContext("clusterMode") || process.env.CLUSTER_MODE || "single";
+const dataNodeCount = parseInt(app.node.tryGetContext("dataNodeCount") || process.env.DATA_NODE_COUNT || "3", 10);
+
 // --- Benchmark config ---
 const benchmarkEnabled = (process.env.BENCHMARK_ENABLED || "true").toLowerCase() === "true";
 const benchmarkInstanceType = process.env.BENCHMARK_INSTANCE_TYPE || "m7g.medium";
@@ -89,4 +93,6 @@ new OpenSearchCodeGuruStack(app, stackName, {
   luceneEnabled,
   luceneRepo,
   luceneBranch,
+  clusterMode,
+  dataNodeCount,
 });

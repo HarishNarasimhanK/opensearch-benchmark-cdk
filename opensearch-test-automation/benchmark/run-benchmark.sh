@@ -50,12 +50,25 @@ echo "============================================"
 
 # --- Wait for OpenSearch to be ready ---
 echo "Waiting for OpenSearch at ${OS_HOST}:9200..."
-for i in $(seq 1 100); do
+for i in $(seq 1 240); do
   if curl -s "http://${OS_HOST}:9200" > /dev/null 2>&1; then
-    echo "OpenSearch is ready!"
+    echo "OpenSearch is responding!"
     break
   fi
-  if [ $i -eq 100 ]; then echo "Timed out waiting for OpenSearch after 50 minutes"; exit 1; fi
+  if [ $i -eq 240 ]; then echo "Timed out waiting for OpenSearch after 2 hours"; exit 1; fi
+  sleep 30
+done
+
+# --- Wait for cluster health to be green ---
+echo "Waiting for cluster health to be green..."
+for i in $(seq 1 120); do
+  STATUS=$(curl -s "http://${OS_HOST}:9200/_cluster/health" 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))" 2>/dev/null || echo "")
+  if [ "$STATUS" = "green" ]; then
+    echo "Cluster health is green!"
+    break
+  fi
+  if [ $i -eq 120 ]; then echo "Timed out waiting for green cluster health after 60 minutes (status: $STATUS)"; exit 1; fi
+  echo "  Cluster status: ${STATUS:-not available} (attempt $i/120)"
   sleep 30
 done
 

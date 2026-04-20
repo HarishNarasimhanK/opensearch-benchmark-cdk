@@ -162,20 +162,16 @@ if [ "$SECURITY_GROUP_ID" = "None" ] || [ -z "$SECURITY_GROUP_ID" ]; then
     --port 22 \
     --cidr 0.0.0.0/0 > /dev/null
 
-  # Open port 9200 (OpenSearch) — restricted to VPC CIDR only 
-  VPC_CIDR=$(aws ec2 describe-vpcs \
-    --region "$REGION" \
-    --vpc-ids "$VPC_ID" \
-    --query 'Vpcs[0].CidrBlock' \
-    --output text)
+  # Allow all traffic within the security group (node-to-node, benchmark-to-opensearch, ALB-to-nodes)
+  # This covers ports 9200 (REST) and 9300 (transport) without exposing them via CIDR rules.
+  # No explicit 9200/9300 CIDR rules — avoids Palisade flagging open ElasticSearch endpoints.
   aws ec2 authorize-security-group-ingress \
     --region "$REGION" \
     --group-id "$SECURITY_GROUP_ID" \
-    --protocol tcp \
-    --port 9200 \
-    --cidr "$VPC_CIDR" > /dev/null
+    --protocol -1 \
+    --source-group "$SECURITY_GROUP_ID" > /dev/null
 
-  echo "  ✅ Created security group: $SECURITY_GROUP_ID (SSH: 0.0.0.0/0, OpenSearch 9200: $VPC_CIDR only)"
+  echo "  ✅ Created security group: $SECURITY_GROUP_ID (SSH: 0.0.0.0/0, internal: all within SG)"
 else
   echo "  ✅ Found existing security group: $SECURITY_GROUP_ID"
 fi

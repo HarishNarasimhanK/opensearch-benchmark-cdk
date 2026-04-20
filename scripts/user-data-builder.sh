@@ -118,6 +118,12 @@ su -l ec2-user -c 'cd /home/ec2-user/lucene-opensearch-src && ./gradlew localDis
 # --- Extract distribution ---
 su -l ec2-user -c 'mkdir -p /home/ec2-user/lucene-opensearch && cp -r /home/ec2-user/lucene-opensearch-src/build/distribution/local/opensearch-*/* /home/ec2-user/lucene-opensearch/'
 
+# --- Install discovery-ec2 plugin (for multi-node) ---
+echo "=== Building discovery-ec2 plugin for Lucene ==="
+su -l ec2-user -c 'cd /home/ec2-user/lucene-opensearch-src && ./gradlew :plugins:discovery-ec2:bundlePlugin -x missingJavadoc 2>/dev/null' && \
+  su -l ec2-user -c 'DISC_ZIP=$(ls /home/ec2-user/lucene-opensearch-src/plugins/discovery-ec2/build/distributions/discovery-ec2-*.zip | head -1) && /home/ec2-user/lucene-opensearch/bin/opensearch-plugin install --batch "file://$DISC_ZIP"' || \
+  echo "discovery-ec2 plugin build failed for Lucene (non-fatal — only needed for multi-node)"
+
 # --- Package and upload Lucene ---
 echo "=== Packaging Lucene tar.gz ==="
 su -l ec2-user -c 'cd /home/ec2-user && tar czf /tmp/opensearch-lucene.tar.gz -C /home/ec2-user/lucene-opensearch .'

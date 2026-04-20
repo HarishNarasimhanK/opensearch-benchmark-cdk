@@ -19,7 +19,7 @@ OUTPUT_DIR="$HOME/profiles"
 mkdir -p "$OUTPUT_DIR"
 
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id 2>/dev/null || echo "unknown")
+INSTANCE_ID=$(cat "$HOME/.instance-id" 2>/dev/null || hostname)
 
 # Find OpenSearch Java PID (the actual JVM process, not the shell wrapper)
 PID=$(pgrep -f 'org.opensearch.bootstrap.OpenSearch' | head -1 || true)

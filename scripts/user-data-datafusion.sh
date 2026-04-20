@@ -10,6 +10,13 @@ exec > /var/log/user-data.log 2>&1
 S3_BUCKET="{{S3_PROFILE_BUCKET}}"
 
 # --- Step 1: Install minimal dependencies (no build tools needed) ---
+# Cache instance ID early (IMDS may become unavailable later)
+TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600" 2>/dev/null || true)
+INSTANCE_ID=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/instance-id 2>/dev/null || curl -s http://169.254.169.254/latest/meta-data/instance-id 2>/dev/null || hostname)
+echo "$INSTANCE_ID" > /home/ec2-user/.instance-id
+chown ec2-user:ec2-user /home/ec2-user/.instance-id
+echo "Instance ID: $INSTANCE_ID"
+
 yum install -y java-21-amazon-corretto-devel cronie amazon-cloudwatch-agent
 export JAVA_HOME=/usr/lib/jvm/java-21-amazon-corretto
 echo 'export JAVA_HOME=/usr/lib/jvm/java-21-amazon-corretto' >> /etc/profile.d/java.sh
@@ -64,12 +71,26 @@ rm -f /tmp/opensearch-datafusion.tar.gz
 echo "OpenSearch extracted to ~/datafusion-opensearch"
 
 # --- Step 5: Configure OpenSearch ---
-cat > /home/ec2-user/datafusion-opensearch/config/opensearch.yml << 'EOF'
+if [ "{{CLUSTER_MODE}}" = "multi" ]; then
+  cat > /home/ec2-user/datafusion-opensearch/config/opensearch.yml << 'EOF'
+cluster.name: datafusion-cluster
+network.host: _site_
+cluster.initial_cluster_manager_nodes: ["seed"]
+discovery.seed_providers: ec2
+discovery.ec2.tag.cluster: {{CLUSTER_TAG}}
+node.roles: [{{NODE_ROLES}}]
+EOF
+  if [ "{{NODE_NAME}}" = "seed" ]; then
+    echo 'node.name: seed' >> /home/ec2-user/datafusion-opensearch/config/opensearch.yml
+  fi
+else
+  cat > /home/ec2-user/datafusion-opensearch/config/opensearch.yml << 'EOF'
 node.name: node-1
 cluster.name: datafusion-cluster
 network.host: _site_
 discovery.type: single-node
 EOF
+fi
 chown ec2-user:ec2-user /home/ec2-user/datafusion-opensearch/config/opensearch.yml
 
 # --- Step 6: Configure JVM heap ---
@@ -112,3 +133,6 @@ LOGROTATE
 # --- Step 10: Start OpenSearch ---
 su -l ec2-user -c 'nohup /home/ec2-user/datafusion-opensearch/bin/opensearch > /home/ec2-user/datafusion-opensearch-run.log 2>&1 &'
 echo "OpenSearch started! Waiting for it to be ready..."
+
+# --- Step 11: Background poller — uploads data folder to S3 after benchmark completes ---
+su -l ec2-user -c 'nohup bash /home/ec2-user/opensearch-test-automation/data-upload/upload-data-on-complete.sh > /home/ec2-user/upload-data.log 2>&1 &'

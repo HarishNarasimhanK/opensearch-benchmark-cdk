@@ -1,6 +1,8 @@
 import * as cdk from "aws-cdk-lib";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as iam from "aws-cdk-lib/aws-iam";
+import * as elbv2 from "aws-cdk-lib/aws-elasticloadbalancingv2";
+import * as targets from "aws-cdk-lib/aws-elasticloadbalancingv2-targets";
 import * as s3assets from "aws-cdk-lib/aws-s3-assets";
 import { Construct } from "constructs";
 import * as fs from "fs";
@@ -30,6 +32,8 @@ interface OpenSearchCodeGuruStackProps extends cdk.StackProps {
   luceneEnabled: boolean;
   luceneRepo: string;
   luceneBranch: string;
+  clusterMode: string;
+  dataNodeCount: number;
 }
 
 export class OpenSearchCodeGuruStack extends cdk.Stack {
@@ -39,22 +43,32 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
     const { branch, opensearchRepo, vpcId, subnetId, subnetAz, securityGroupId, keyPairName,
       sqlPluginRepo, sqlPluginBranch, s3ProfileBucket, instanceType, ebsSizeGb, ebsIops,
       ebsThroughput, jvmHeap, benchmarkEnabled, benchmarkInstanceType, benchmarkEbsSizeGb,
-      workloadRepo, workloadBranch, luceneEnabled, luceneRepo, luceneBranch } = props;
+      workloadRepo, workloadBranch, luceneEnabled, luceneRepo, luceneBranch,
+      clusterMode, dataNodeCount } = props;
+
+    const isMultiNode = clusterMode === "multi";
+    const clusterTag = `${id}-datafusion-cluster`;
 
     // --- Look up existing VPC and Subnet ---
     const vpc = ec2.Vpc.fromLookup(this, "ExistingVpc", { vpcId });
     const subnet = ec2.Subnet.fromSubnetAttributes(this, "ExistingSubnet", {
       subnetId, availabilityZone: subnetAz,
     });
-    const sg = ec2.SecurityGroup.fromSecurityGroupId(this, "ExistingSG", securityGroupId);
+    const sg = ec2.SecurityGroup.fromSecurityGroupId(this, "ExistingSG", securityGroupId, {
+      mutable: false, // Prevent CDK from adding ingress rules (e.g., ALB health check 0.0.0.0/0 on 9200)
+    });
 
-    // --- IAM role with S3 and CloudWatch permissions ---
+    // --- IAM role ---
+    const managedPolicies = [
+      iam.ManagedPolicy.fromAwsManagedPolicyName("AmazonS3FullAccess"),
+      iam.ManagedPolicy.fromAwsManagedPolicyName("CloudWatchAgentServerPolicy"),
+    ];
+    if (isMultiNode) {
+      managedPolicies.push(iam.ManagedPolicy.fromAwsManagedPolicyName("AmazonEC2ReadOnlyAccess"));
+    }
     const role = new iam.Role(this, "OpenSearchInstanceRole", {
       assumedBy: new iam.ServicePrincipal("ec2.amazonaws.com"),
-      managedPolicies: [
-        iam.ManagedPolicy.fromAwsManagedPolicyName("AmazonS3FullAccess"),
-        iam.ManagedPolicy.fromAwsManagedPolicyName("CloudWatchAgentServerPolicy"),
-      ],
+      managedPolicies,
     });
     const instanceProfile = new iam.InstanceProfile(this, "OpenSearchInstanceProfile", { role });
     const keyPair = ec2.KeyPair.fromKeyPairName(this, "ExistingKeyPair", keyPairName);
@@ -72,7 +86,7 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
       const ud = ec2.UserData.forLinux();
       ud.addCommands(userDataScript);
 
-      const ltProps: ec2.LaunchTemplateProps = {
+      const lt = new ec2.LaunchTemplate(this, ltId, {
         instanceType: new ec2.InstanceType(instType),
         machineImage: ec2.MachineImage.latestAmazonLinux2023({ cpuType: ec2.AmazonLinuxCpuType.ARM_64 }),
         securityGroup: sg, instanceProfile, userData: ud, keyPair,
@@ -84,14 +98,13 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
             ...(ebsThroughputVal ? { throughput: ebsThroughputVal } : {}),
           }),
         }],
-      };
-
-      const lt = new ec2.LaunchTemplate(this, ltId, ltProps);
+      });
 
       const inst = new ec2.Instance(this, nodeId, {
         vpc, instanceType: new ec2.InstanceType(instType),
         machineImage: ec2.MachineImage.latestAmazonLinux2023({ cpuType: ec2.AmazonLinuxCpuType.ARM_64 }),
         vpcSubnets: { subnets: [subnet] },
+        securityGroup: sg, // Use the imported SG — prevents CDK from creating orphan SGs
       });
 
       const cfn = inst.node.defaultChild as cdk.CfnResource;
@@ -101,6 +114,26 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
       cfn.addPropertyDeletionOverride("UserData");
       cfn.addPropertyDeletionOverride("IamInstanceProfile");
       cfn.addPropertyDeletionOverride("KeyName");
+
+      return inst;
+    };
+
+    // --- Helper: create a DataFusion instance with cluster config ---
+    const createDataFusionInstance = (nodeId: string, ltId: string, nodeName: string, nodeRoles: string): ec2.Instance => {
+      const script = fs.readFileSync(path.join(__dirname, "..", "scripts", "user-data-datafusion.sh"), "utf-8")
+        .replace(/\{\{S3_PROFILE_BUCKET\}\}/g, s3ProfileBucket)
+        .replace(/\{\{JVM_HEAP\}\}/g, jvmHeap)
+        .replace(/\{\{SCRIPTS_S3_PATH\}\}/g, scriptsS3Path)
+        .replace(/\{\{CLUSTER_MODE\}\}/g, clusterMode)
+        .replace(/\{\{CLUSTER_TAG\}\}/g, clusterTag)
+        .replace(/\{\{NODE_NAME\}\}/g, nodeName)
+        .replace(/\{\{NODE_ROLES\}\}/g, nodeRoles);
+
+      const inst = createInstance(nodeId, ltId, script, instanceType, ebsSizeGb, ebsIops, ebsThroughput);
+
+      if (isMultiNode) {
+        cdk.Tags.of(inst).add("cluster", clusterTag);
+      }
 
       return inst;
     };
@@ -117,46 +150,145 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
       .replace(/\{\{LUCENE_REPO\}\}/g, luceneRepo)
       .replace(/\{\{S3_PROFILE_BUCKET\}\}/g, s3ProfileBucket);
 
-    const builderInstance = createInstance("BuilderInstance", "BuilderLaunchTemplate", builderScript, instanceType, ebsSizeGb, ebsIops, ebsThroughput);
+    const builderInstance = createInstance("BuilderInstance", "BuilderLt", builderScript, instanceType, ebsSizeGb, ebsIops, ebsThroughput);
 
-    new cdk.CfnOutput(this, "A1BuilderSSH", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${builderInstance.instancePublicDnsName}` });
-    new cdk.CfnOutput(this, "A2BuilderLog", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${builderInstance.instancePublicDnsName} "tail -f /var/log/user-data.log"` });
-    new cdk.CfnOutput(this, "A3BuilderInstanceId", { value: builderInstance.instanceId });
-
-    // =========================================================================
-    // DataFusion OpenSearch Instance — downloads pre-built tar.gz, starts OpenSearch
-    // =========================================================================
-    const datafusionScript = fs.readFileSync(path.join(__dirname, "..", "scripts", "user-data-datafusion.sh"), "utf-8")
-      .replace(/\{\{S3_PROFILE_BUCKET\}\}/g, s3ProfileBucket)
-      .replace(/\{\{JVM_HEAP\}\}/g, jvmHeap)
-      .replace(/\{\{SCRIPTS_S3_PATH\}\}/g, scriptsS3Path);
-
-    const datafusionInstance = createInstance("OpenSearchInstance", "OpenSearchLaunchTemplate", datafusionScript, instanceType, ebsSizeGb, ebsIops, ebsThroughput);
-
-    new cdk.CfnOutput(this, "B1DataFusionSSH", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${datafusionInstance.instancePublicDnsName}` });
-    new cdk.CfnOutput(this, "B2DataFusionSetupLog", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${datafusionInstance.instancePublicDnsName} "tail -f /var/log/user-data.log"` });
-    new cdk.CfnOutput(this, "B3DataFusionRuntimeLog", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${datafusionInstance.instancePublicDnsName} "tail -f ~/datafusion-opensearch-run.log"` });
-    new cdk.CfnOutput(this, "B4DataFusionInstanceId", { value: datafusionInstance.instanceId });
-    new cdk.CfnOutput(this, "B5DataFusionPrivateIp", { value: datafusionInstance.instancePrivateIp });
+    new cdk.CfnOutput(this, "A1_BuilderSSH", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${builderInstance.instancePublicDnsName}` });
+    new cdk.CfnOutput(this, "A2_BuilderLog", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${builderInstance.instancePublicDnsName} "tail -f /var/log/user-data.log"` });
 
     // =========================================================================
-    // Lucene OpenSearch Instance (optional) — downloads pre-built tar.gz, starts OpenSearch
+    // DataFusion OpenSearch: single-node or multi-node cluster
     // =========================================================================
-    let lucenePrivateIp = "";
+    let datafusionEndpoint: string;
+
+    if (isMultiNode) {
+      // --- Multi-node: 3 managers + N data nodes + internal ALB ---
+      const seedManager = createDataFusionInstance("SeedManager", "SeedManagerLt", "seed", "cluster_manager");
+      new cdk.CfnOutput(this, "B1_SeedManagerSSH", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${seedManager.instancePublicDnsName}` });
+
+      for (let i = 2; i <= 3; i++) {
+        createDataFusionInstance(`Manager${i}`, `Manager${i}Lt`, `manager-${i}`, "cluster_manager");
+      }
+
+      const dataInstances: ec2.Instance[] = [];
+      for (let i = 1; i <= dataNodeCount; i++) {
+        const data = createDataFusionInstance(`DataNode${i}`, `DataNode${i}Lt`, `data-${i}`, "data, ingest");
+        dataInstances.push(data);
+        new cdk.CfnOutput(this, `B2DataNode${i}SSH`, { value: `ssh -i ~/${keyPairName}.pem ec2-user@${data.instancePublicDnsName}` });
+      }
+
+      // Internal ALB — routes to data nodes on port 9200
+      const alb = new elbv2.ApplicationLoadBalancer(this, "ClusterALB", {
+        vpc, internetFacing: false, securityGroup: sg,
+      });
+
+      const listener = alb.addListener("OpenSearchListener", {
+        port: 9200, protocol: elbv2.ApplicationProtocol.HTTP,
+      });
+
+      listener.addTargets("DataNodeTargets", {
+        port: 9200,
+        protocol: elbv2.ApplicationProtocol.HTTP,
+        targets: dataInstances.map((inst) => new targets.InstanceTarget(inst, 9200)),
+        healthCheck: {
+          path: "/", port: "9200", healthyHttpCodes: "200",
+          interval: cdk.Duration.seconds(30), timeout: cdk.Duration.seconds(10),
+          healthyThresholdCount: 2, unhealthyThresholdCount: 10,
+        },
+      });
+
+      datafusionEndpoint = alb.loadBalancerDnsName;
+
+      new cdk.CfnOutput(this, "B3_ClusterALBUrl", { value: `http://${alb.loadBalancerDnsName}:9200` });
+      new cdk.CfnOutput(this, "B4_ClusterMode", { value: `multi (3 managers + ${dataNodeCount} data nodes)` });
+
+    } else {
+      // --- Single-node (default) ---
+      const instance = createDataFusionInstance("OpenSearchInstance", "OpenSearchLt", "node-1", "");
+      datafusionEndpoint = instance.instancePrivateIp;
+
+      new cdk.CfnOutput(this, "B1_DataFusionSSH", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${instance.instancePublicDnsName}` });
+      new cdk.CfnOutput(this, "B2_DataFusionSetupLog", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${instance.instancePublicDnsName} "tail -f /var/log/user-data.log"` });
+      new cdk.CfnOutput(this, "B3_DataFusionRuntimeLog", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${instance.instancePublicDnsName} "tail -f ~/datafusion-opensearch-run.log"` });
+      new cdk.CfnOutput(this, "B4_DataFusionPrivateIp", { value: instance.instancePrivateIp });
+    }
+
+    // =========================================================================
+    // Lucene OpenSearch: single-node or multi-node cluster
+    // =========================================================================
+    let luceneEndpoint = "";
     if (luceneEnabled) {
-      const luceneScript = fs.readFileSync(path.join(__dirname, "..", "scripts", "user-data-lucene.sh"), "utf-8")
-        .replace(/\{\{S3_PROFILE_BUCKET\}\}/g, s3ProfileBucket)
-        .replace(/\{\{JVM_HEAP\}\}/g, jvmHeap)
-        .replace(/\{\{SCRIPTS_S3_PATH\}\}/g, scriptsS3Path);
+      const luceneClusterTag = `${id}-lucene-cluster`;
 
-      const luceneInstance = createInstance("LuceneInstance", "LuceneLaunchTemplate", luceneScript, instanceType, ebsSizeGb, ebsIops, ebsThroughput);
-      lucenePrivateIp = luceneInstance.instancePrivateIp;
+      // Helper: create a Lucene instance with cluster config
+      const createLuceneInstance = (nodeId: string, ltId: string, nodeName: string, nodeRoles: string): ec2.Instance => {
+        const script = fs.readFileSync(path.join(__dirname, "..", "scripts", "user-data-lucene.sh"), "utf-8")
+          .replace(/\{\{S3_PROFILE_BUCKET\}\}/g, s3ProfileBucket)
+          .replace(/\{\{JVM_HEAP\}\}/g, jvmHeap)
+          .replace(/\{\{SCRIPTS_S3_PATH\}\}/g, scriptsS3Path)
+          .replace(/\{\{CLUSTER_MODE\}\}/g, clusterMode)
+          .replace(/\{\{CLUSTER_TAG\}\}/g, luceneClusterTag)
+          .replace(/\{\{NODE_NAME\}\}/g, nodeName)
+          .replace(/\{\{NODE_ROLES\}\}/g, nodeRoles);
 
-      new cdk.CfnOutput(this, "C1LuceneSSH", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${luceneInstance.instancePublicDnsName}` });
-      new cdk.CfnOutput(this, "C2LuceneSetupLog", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${luceneInstance.instancePublicDnsName} "tail -f /var/log/user-data.log"` });
-      new cdk.CfnOutput(this, "C3LuceneRuntimeLog", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${luceneInstance.instancePublicDnsName} "tail -f ~/lucene-opensearch-run.log"` });
-      new cdk.CfnOutput(this, "C4LuceneInstanceId", { value: luceneInstance.instanceId });
-      new cdk.CfnOutput(this, "C5LucenePrivateIp", { value: luceneInstance.instancePrivateIp });
+        const inst = createInstance(nodeId, ltId, script, instanceType, ebsSizeGb, ebsIops, ebsThroughput);
+
+        if (isMultiNode) {
+          cdk.Tags.of(inst).add("cluster", luceneClusterTag);
+        }
+
+        return inst;
+      };
+
+      if (isMultiNode) {
+        // --- Multi-node: 3 managers + N data nodes + internal ALB ---
+        const luceneSeedManager = createLuceneInstance("LuceneSeedManager", "LuceneSeedManagerLt", "seed", "cluster_manager");
+        new cdk.CfnOutput(this, "C1_LuceneSeedManagerSSH", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${luceneSeedManager.instancePublicDnsName}` });
+
+        for (let i = 2; i <= 3; i++) {
+          createLuceneInstance(`LuceneManager${i}`, `LuceneManager${i}Lt`, `manager-${i}`, "cluster_manager");
+        }
+
+        const luceneDataInstances: ec2.Instance[] = [];
+        for (let i = 1; i <= dataNodeCount; i++) {
+          const data = createLuceneInstance(`LuceneDataNode${i}`, `LuceneDataNode${i}Lt`, `data-${i}`, "data, ingest");
+          luceneDataInstances.push(data);
+          new cdk.CfnOutput(this, `C2LuceneDataNode${i}SSH`, { value: `ssh -i ~/${keyPairName}.pem ec2-user@${data.instancePublicDnsName}` });
+        }
+
+        // Internal ALB for Lucene cluster
+        const luceneAlb = new elbv2.ApplicationLoadBalancer(this, "LuceneClusterALB", {
+          vpc, internetFacing: false, securityGroup: sg,
+        });
+
+        const luceneListener = luceneAlb.addListener("LuceneOpenSearchListener", {
+          port: 9200, protocol: elbv2.ApplicationProtocol.HTTP,
+        });
+
+        luceneListener.addTargets("LuceneDataNodeTargets", {
+          port: 9200,
+          protocol: elbv2.ApplicationProtocol.HTTP,
+          targets: luceneDataInstances.map((inst) => new targets.InstanceTarget(inst, 9200)),
+          healthCheck: {
+            path: "/", port: "9200", healthyHttpCodes: "200",
+            interval: cdk.Duration.seconds(30), timeout: cdk.Duration.seconds(10),
+            healthyThresholdCount: 2, unhealthyThresholdCount: 10,
+          },
+        });
+
+        luceneEndpoint = luceneAlb.loadBalancerDnsName;
+
+        new cdk.CfnOutput(this, "C3_LuceneClusterALBUrl", { value: `http://${luceneAlb.loadBalancerDnsName}:9200` });
+        new cdk.CfnOutput(this, "C4_LuceneClusterMode", { value: `multi (3 managers + ${dataNodeCount} data nodes)` });
+
+      } else {
+        // --- Single-node (default) ---
+        const luceneInstance = createLuceneInstance("LuceneInstance", "LuceneLt", "node-1", "");
+        luceneEndpoint = luceneInstance.instancePrivateIp;
+
+        new cdk.CfnOutput(this, "C1_LuceneSSH", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${luceneInstance.instancePublicDnsName}` });
+        new cdk.CfnOutput(this, "C2_LuceneSetupLog", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${luceneInstance.instancePublicDnsName} "tail -f /var/log/user-data.log"` });
+        new cdk.CfnOutput(this, "C3_LucenePrivateIp", { value: luceneInstance.instancePrivateIp });
+      }
     }
 
     // =========================================================================
@@ -166,17 +298,16 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
       const benchmarkScript = fs.readFileSync(path.join(__dirname, "..", "scripts", "user-data-benchmark.sh"), "utf-8")
         .replace(/\{\{WORKLOAD_REPO\}\}/g, workloadRepo)
         .replace(/\{\{WORKLOAD_BRANCH\}\}/g, workloadBranch)
-        .replace(/\{\{DATAFUSION_PRIVATE_IP\}\}/g, datafusionInstance.instancePrivateIp)
-        .replace(/\{\{LUCENE_PRIVATE_IP\}\}/g, lucenePrivateIp)
+        .replace(/\{\{DATAFUSION_PRIVATE_IP\}\}/g, datafusionEndpoint)
+        .replace(/\{\{LUCENE_PRIVATE_IP\}\}/g, luceneEndpoint)
         .replace(/\{\{S3_PROFILE_BUCKET\}\}/g, s3ProfileBucket)
         .replace(/\{\{SCRIPTS_S3_PATH\}\}/g, scriptsS3Path);
 
-      const benchmarkInstance = createInstance("BenchmarkInstance", "BenchmarkLaunchTemplate", benchmarkScript, benchmarkInstanceType, benchmarkEbsSizeGb);
+      const benchmarkInstance = createInstance("BenchmarkInstance", "BenchmarkLt", benchmarkScript, benchmarkInstanceType, benchmarkEbsSizeGb);
 
-      new cdk.CfnOutput(this, "D1BenchmarkSSH", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${benchmarkInstance.instancePublicDnsName}` });
-      new cdk.CfnOutput(this, "D2BenchmarkSetupLog", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${benchmarkInstance.instancePublicDnsName} "tail -f /var/log/user-data.log"` });
-      new cdk.CfnOutput(this, "D3BenchmarkRunLog", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${benchmarkInstance.instancePublicDnsName} "tail -f ~/benchmark-run.log"` });
-      new cdk.CfnOutput(this, "D4BenchmarkInstanceId", { value: benchmarkInstance.instanceId });
+      new cdk.CfnOutput(this, "D1_BenchmarkSSH", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${benchmarkInstance.instancePublicDnsName}` });
+      new cdk.CfnOutput(this, "D2_BenchmarkSetupLog", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${benchmarkInstance.instancePublicDnsName} "tail -f /var/log/user-data.log"` });
+      new cdk.CfnOutput(this, "D3_BenchmarkRunLog", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${benchmarkInstance.instancePublicDnsName} "tail -f ~/benchmark-run.log"` });
     }
   }
 }

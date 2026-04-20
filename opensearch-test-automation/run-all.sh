@@ -69,3 +69,19 @@ echo "  All tests complete!"
 echo "  Benchmark results:    ~/benchmark-results/"
 echo "  Correctness results:  ~/correctness-results/"
 echo "============================================"
+
+# --- Run field integrity check (data quality comparison) ---
+echo ""
+echo ">>> Running field integrity check (Lucene vs DataFusion)..."
+if [ -n "${LUCENE_HOST:-}" ]; then
+  bash "$REPO_DIR/data-integrity/check-field-integrity.sh" "$LUCENE_HOST" "$DATAFUSION_HOST" \
+    2>&1 | tee "$HOME/field-integrity.log"
+else
+  echo "Lucene not enabled, skipping field integrity check."
+fi
+
+# --- Signal data nodes to upload their data folders ---
+echo ""
+echo "Uploading benchmark-complete flag to S3..."
+echo "BENCHMARK_COMPLETE=$(date -u +%Y%m%d_%H%M%S)" | aws s3 cp - "s3://${S3_BUCKET}/flags/BENCHMARK_COMPLETE"
+echo "Flag uploaded — data nodes will upload their data folders shortly."
