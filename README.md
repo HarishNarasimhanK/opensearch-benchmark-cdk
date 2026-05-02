@@ -1,11 +1,11 @@
 # OpenSearch Performance & Correctness Test Infrastructure
 
-One-command CDK stack that provisions EC2 instances to benchmark and compare the DataFusion engine against vanilla Lucene OpenSearch. Supports both single-node and multi-node cluster modes.
+One-command CDK stack that provisions EC2 instances to benchmark and compare the DataFusion analytics engine against vanilla Lucene OpenSearch. Supports both single-node and multi-node cluster modes.
 
-- **Builder Instance** — builds both DataFusion and Lucene OpenSearch from source, uploads pre-built tar.gz to S3, then shuts down
-- **DataFusion OpenSearch** — downloads pre-built distribution from S3, runs with PPL queries (via `/_plugins/_ppl`)
-- **Lucene OpenSearch** — downloads pre-built distribution from S3, runs with DSL queries (via `/_search`), no plugins
-- **Benchmark Runner** — runs OpenSearch Benchmark (OSB) and correctness tests against both engines, uploads results to S3
+- **Builder Instance** — builds both DataFusion (sandbox + 7 plugins + Rust native lib) and Lucene (vanilla) from source, uploads tar.gz to S3, then shuts down
+- **DataFusion OpenSearch** — downloads pre-built distribution from S3, runs with PPL queries via `/_analytics/ppl`
+- **Lucene OpenSearch** — downloads pre-built distribution from S3, runs with DSL queries via `/_search`
+- **Benchmark Runner** — runs OSB benchmarks, correctness tests, field integrity checks, and coordinates data uploads to S3
 
 ---
 
@@ -30,7 +30,7 @@ npx cdk bootstrap
 npx cdk deploy
 
 # Multi-node (3 managers + N data nodes per engine, with ALB)
-npx cdk deploy -c clusterMode=multi -c dataNodeCount=1
+npx cdk deploy -c clusterMode=multi -c dataNodeCount=3
 ```
 
 On first run, `setup-env.sh` runs automatically to discover your VPC, create a security group, key pair, and S3 bucket.
@@ -64,178 +64,84 @@ npx cdk destroy --force
 | Instance | Type | What it does |
 |---|---|---|
 | Builder | `r7g.2xlarge` | Builds both engines, uploads tar.gz to S3, shuts down |
-| DataFusion | `r7g.2xlarge` | Downloads tar.gz, runs OpenSearch with DataFusion + SQL plugins |
-| Lucene | `r7g.2xlarge` | Downloads tar.gz, runs vanilla OpenSearch (no plugins) |
-| Benchmark | `m7g.medium` | Runs OSB benchmarks + correctness tests against both |
+| DataFusion | `r7g.2xlarge` | Downloads tar.gz, runs OpenSearch with sandbox plugins (PPL via `/_analytics/ppl`) |
+| Lucene | `r7g.2xlarge` | Downloads tar.gz, runs vanilla OpenSearch (DSL via `/_search`) |
+| Benchmark | `m7g.medium` | Runs OSB benchmarks, correctness, field integrity, signals data upload |
 
-### Multi-node mode (`npx cdk deploy -c clusterMode=multi -c dataNodeCount=1`)
+### Multi-node mode (`npx cdk deploy -c clusterMode=multi -c dataNodeCount=3`)
 
-| Instance | Count | Role |
-|---|---|---|
-| Builder | 1 | Builds both engines, uploads tar.gz to S3 |
-| DataFusion Seed Manager | 1 | Bootstraps DataFusion cluster |
-| DataFusion Managers | 2 | Cluster manager redundancy |
-| DataFusion Data Nodes | N (configurable) | Stores data, serves queries |
-| DataFusion ALB | 1 | Internal load balancer → data nodes on port 9200 |
-| Lucene Seed Manager | 1 | Bootstraps Lucene cluster |
-| Lucene Managers | 2 | Cluster manager redundancy |
-| Lucene Data Nodes | N (configurable) | Stores data, serves queries |
-| Lucene ALB | 1 | Internal load balancer → data nodes on port 9200 |
-| Benchmark | 1 | Runs benchmarks against both ALBs |
-
-Multi-node uses EC2 tag-based discovery (`discovery.seed_providers: ec2`). Each engine has its own cluster tag so they don't discover each other.
+Per engine: 3 cluster managers + N data nodes + internal ALB. Uses EC2 tag-based discovery. Each engine has its own cluster tag.
 
 ---
 
-## S3 Structure
-
-```
-s3://opensearch-codeguru-<account-id>/
-├── builds/
-│   ├── opensearch-datafusion.tar.gz    ← Pre-built DataFusion + all plugins
-│   ├── opensearch-lucene.tar.gz        ← Pre-built Lucene (no plugins)
-│   └── BUILD_COMPLETE                  ← Marker file
-├── benchmark-results/
-│   ├── datafusion/<run-id>.csv
-│   └── lucene/<run-id>.csv
-├── correctness-results/
-│   ├── datafusion/<run-id>.json
-│   └── lucene/<run-id>.json
-└── profiler/
-    ├── datafusion/<instance-id>/cpu_<timestamp>.html
-    └── lucene/<instance-id>/cpu_<timestamp>.html
-```
-
----
-
-## Manual Benchmark Commands
-
-SSH into the benchmark instance and run benchmarks manually:
-
-```bash
-ssh -i ~/opensearch-benchmark.pem ec2-user@<benchmark-dns>
-```
-
-### Run all benchmarks + correctness tests
-
-```bash
-nohup bash ~/opensearch-test-automation/run-all.sh > ~/benchmark-run.log 2>&1 &
-tail -f ~/benchmark-run.log
-```
-
-### Run individual benchmarks
-
-```bash
-# DataFusion (single-node — use private IP)
-bash ~/opensearch-test-automation/benchmark/run-benchmark.sh \
-  --host <datafusion-private-ip> \
-  --engine datafusion \
-  --workload ~/datafusion-workloads/clickbench
-
-# DataFusion (multi-node — use ALB DNS)
-bash ~/opensearch-test-automation/benchmark/run-benchmark.sh \
-  --host <datafusion-alb-dns> \
-  --engine datafusion \
-  --workload ~/datafusion-workloads/clickbench
-
-# Lucene (single-node — use private IP)
-bash ~/opensearch-test-automation/benchmark/run-benchmark.sh \
-  --host <lucene-private-ip> \
-  --engine lucene \
-  --workload ~/lucene-workloads/clickbench
-
-# Lucene (multi-node — use ALB DNS)
-bash ~/opensearch-test-automation/benchmark/run-benchmark.sh \
-  --host <lucene-alb-dns> \
-  --engine lucene \
-  --workload ~/lucene-workloads/clickbench
-```
-
-### Check cluster health (multi-node)
-
-```bash
-# From the benchmark instance
-curl -s http://<alb-dns>:9200/_cat/nodes?v
-curl -s http://<alb-dns>:9200/_cluster/health?pretty
-```
-
----
-
-## Configuration
-
-### CLI Flags
+## CLI Flags
 
 | Flag | Default | Description |
 |---|---|---|
 | `-c clusterMode=multi` | `single` | Enable multi-node cluster mode |
 | `-c dataNodeCount=3` | `3` | Number of data nodes per engine (multi-node only) |
-| `-c datafusionBranch=<branch>` | `feature/datafusion` | DataFusion OpenSearch branch |
-| `-c datafusionRepo=<url>` | `opensearch-project/OpenSearch` | DataFusion OpenSearch repo |
+| `-c datafusionBranch=<branch>` | `main-benchmark` | DataFusion OpenSearch branch |
+| `-c datafusionRepo=<url>` | `AjayRajNelapudi/OpenSearch` | DataFusion OpenSearch repo |
+| `-c luceneBranch=<branch>` | `main` | Lucene OpenSearch branch |
+| `-c luceneRepo=<url>` | `opensearch-project/OpenSearch` | Lucene OpenSearch repo |
+| `-c workloadRepo=<url>` | `AjayRajNelapudi/opensearch-benchmark-workloads` | OSB benchmark workloads repo |
+| `-c workloadBranch=<branch>` | `indexing` | OSB benchmark workloads branch |
 
-### .env Variables
+---
+
+## .env Variables
 
 Auto-generated by `setup-env.sh`. Key variables:
 
 | Variable | Default | Description |
 |---|---|---|
-| `INSTANCE_TYPE` | `r7g.2xlarge` | OpenSearch instance type |
+| `INSTANCE_TYPE` | `r7g.2xlarge` | OpenSearch instance type (must be ARM64) |
 | `JVM_HEAP` | `8g` | JVM heap size |
 | `LUCENE_ENABLED` | `true` | Set to `false` to skip Lucene |
 | `BENCHMARK_ENABLED` | `true` | Set to `false` to skip benchmark |
-| `DATAFUSION_BRANCH` | `feature/datafusion` | Branch to build |
-| `LUCENE_BRANCH` | `main` | Branch to build |
+| `METRICS_STORE_HOST` | (empty) | Optional AOS domain for OSB telemetry persistence |
+
+---
+
+## Test Pipeline
+
+Each deploy runs the following pipeline automatically (orchestrated by `run-all.sh`):
+
+1. **Generate Run ID** — `run-YYYYMMDD_HHMMSS`
+2. **Lucene benchmark** — OSB with `dsl-clickbench` test procedure
+3. **Lucene correctness** — DSL query pass/fail per query
+4. **DataFusion benchmark** — OSB with `datafusion-ppl` test procedure
+5. **DataFusion correctness** — PPL query pass/fail per query
+6. **Field integrity check** — compares total count and null count per field between Lucene (DSL) and DataFusion (PPL)
+7. **Signal data upload** — data nodes upload their data folders to S3
+
+All results go to `s3://bucket/runs/<RUN_ID>/`.
+
+---
+
+## Features
+
+- **OSB Benchmark** — runs ClickBench workload via OpenSearch Benchmark against both engines with configurable iterations, shards, and ingest percentage
+- **Correctness Testing** — executes all 43 PPL/DSL queries individually and captures pass/fail per query with raw responses
+- **Field Integrity Check** — compares total doc count and null count per field between Lucene (DSL) and DataFusion (PPL) across all 103 ClickBench fields
+- **OSB Telemetry** — node-stats telemetry (CPU, memory, segments, merges, query cache) collected during benchmark runs; optionally persisted to an AOS metrics store domain
+- **Async Profiler** — CPU flame graphs captured every 5 minutes on each OpenSearch instance via async-profiler cron job
+- **Data Upload** — after benchmarks complete, each data node tars and uploads its OpenSearch data directory (Parquet files for DataFusion, Lucene segments for Lucene) to S3 for post-mortem analysis
+- **CloudWatch Metrics + Logs** — system metrics (CPU, memory, disk, network) and all logs streamed to CloudWatch for real-time monitoring and post-termination access
+- **Run Isolation** — each deploy generates a unique `RUN_ID`; all results are stored under `s3://bucket/runs/<RUN_ID>/` so runs never overwrite each other
 
 ---
 
 ## CloudWatch Logs
 
-| Log Group | Source | Content |
-|---|---|---|
-| `/opensearch/builder/user-data` | Builder instance | Build progress (persists after shutdown) |
-| `/opensearch/datafusion/user-data` | DataFusion instances | Setup/download progress |
-| `/opensearch/datafusion/runtime` | DataFusion instances | OpenSearch runtime logs |
-| `/opensearch/lucene/user-data` | Lucene instances | Setup/download progress |
-| `/opensearch/lucene/runtime` | Lucene instances | OpenSearch runtime logs |
-| `/opensearch/benchmark/user-data` | Benchmark instance | OSB setup progress |
-| `/opensearch/benchmark/run` | Benchmark instance | Benchmark execution logs |
-
----
-
-## Security
-
-- OpenSearch binds to `_site_` (private IP only) — not reachable from public internet
-- ALBs are internal (`internetFacing: false`) — VPC only
-- Security group: SSH (22) open to `0.0.0.0/0`, all other traffic via SG self-referencing rule only
-- No port 9200/9300 CIDR rules — prevents Palisade from flagging open ElasticSearch endpoints
-- SG imported as `mutable: false` — CDK cannot add ingress rules (prevents ALB auto-adding `0.0.0.0/0:9200`)
-
----
-
-## Troubleshooting
-
-**CDK deploy fails with "Not logged in to AWS"**
-```bash
-ada credentials update --account <ACCOUNT_ID> --role Admin
-```
-
-**Termination protection blocks destroy**
-```bash
-for ID in $(aws ec2 describe-instances --filters "Name=tag:aws:cloudformation:stack-name,Values=OpenSearchCodeGuruStack" --query 'Reservations[].Instances[].InstanceId' --output text --region us-east-1); do
-  aws ec2 modify-instance-attribute --instance-id $ID --no-disable-api-termination --region us-east-1 2>/dev/null
-done
-npx cdk destroy --force
-```
-
-**Stack stuck in DELETE_FAILED**
-```bash
-aws cloudformation delete-stack --stack-name OpenSearchCodeGuruStack --retain-resources <failed-resource-id> --region us-east-1
-```
-
-**Benchmark fails with 502 Bad Gateway (multi-node)**
-The cluster hasn't formed yet. Wait for all nodes to download the tar.gz and start OpenSearch. Check cluster health:
-```bash
-curl -s http://<alb-dns>:9200/_cluster/health?pretty
-```
-
-**Palisade isolates instances**
-Ensure the security group has no port 9200/9300 CIDR rules. Delete `.env` and the old SG, then redeploy to get a clean SG with only SSH + self-referencing rules.
+| Log Group | Source |
+|---|---|
+| `/opensearch/builder/user-data` | Builder instance build progress |
+| `/opensearch/datafusion/user-data` | DataFusion setup progress |
+| `/opensearch/datafusion/runtime` | DataFusion OpenSearch runtime logs |
+| `/opensearch/lucene/user-data` | Lucene setup progress |
+| `/opensearch/lucene/runtime` | Lucene OpenSearch runtime logs |
+| `/opensearch/benchmark/user-data` | Benchmark setup progress |
+| `/opensearch/benchmark/run` | Full orchestrator output (run-all.sh) |
+| `/opensearch/benchmark/datafusion` | DataFusion benchmark output |
+| `/opensearch/benchmark/lucene` | Lucene benchmark output |

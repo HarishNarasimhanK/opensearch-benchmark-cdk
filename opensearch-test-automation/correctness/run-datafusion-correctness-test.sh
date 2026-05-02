@@ -16,9 +16,10 @@ source "$HOME/.opensearch-env" 2>/dev/null || true
 
 OS_HOST="${1:?Usage: $0 <host> <engine-name>}"
 ENGINE="${2:?Usage: $0 <host> <engine-name>}"
+RUN_ID="${RUN_ID:-run-$(date +%Y%m%d_%H%M%S)}"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 RESULTS_DIR="$HOME/correctness-results/${ENGINE}"
-OUTPUT_FILE="${RESULTS_DIR}/${ENGINE}-correctness-${TIMESTAMP}.json"
+OUTPUT_FILE="${RESULTS_DIR}/correctness-${TIMESTAMP}.json"
 mkdir -p "$RESULTS_DIR"
 
 echo "============================================"
@@ -61,14 +62,14 @@ declare -a QUERY_NAMES=(
   "q17-user-search-activity"
   "q18-user-search-limit"
   "q19-user-minute-search"
-  # "q20-specific-user"              # SKIPPED: crashes datafusion OpenSearch (projection.rs off-by-one panic)
+  "q20-specific-user"
   "q21-google-urls"
   "q22-google-search-phrases"
   "q23-google-title-search"
-  # "q24-google-urls-sorted"         # SKIPPED: crashes datafusion OpenSearch (projection.rs off-by-one panic)
-  # "q25-search-phrases-by-time"     # SKIPPED: crashes datafusion OpenSearch (projection.rs off-by-one panic)
-  # "q26-search-phrases-sorted"      # SKIPPED: crashes datafusion OpenSearch (projection.rs off-by-one panic)
-  # "q27-search-phrases-multi-sort"  # SKIPPED: crashes datafusion OpenSearch (projection.rs off-by-one panic)
+  "q24-google-urls-sorted"
+  "q25-search-phrases-by-time"
+  "q26-search-phrases-sorted"
+  "q27-search-phrases-multi-sort"
   "q28-counter-url-length"
   "q30-resolution-width-sums"
   "q31-search-engine-client-stats"
@@ -147,7 +148,7 @@ for name in "${QUERY_NAMES[@]}"; do
   query="${QUERIES[$name]}"
   echo -n "  Running ${name} (${COUNT}/${TOTAL})... "
 
-  response=$(curl -s --max-time 60 -X POST "http://${OS_HOST}:9200/_plugins/_ppl" \
+  response=$(curl -s --max-time 60 -X POST "http://${OS_HOST}:9200/_analytics/ppl" \
     -H 'Content-Type: application/json' \
     -d "{\"query\": \"${query}\"}" 2>&1) || response="{\"error\": \"curl failed or timed out\"}"
 
@@ -185,8 +186,9 @@ echo "============================================"
 
 # --- Upload to S3 ---
 if [ -n "${S3_BUCKET:-}" ]; then
-  if aws s3 cp "$OUTPUT_FILE" "s3://${S3_BUCKET}/correctness-results/${ENGINE}/${ENGINE}-correctness-${TIMESTAMP}.json"; then
-    echo "Uploaded to: s3://${S3_BUCKET}/correctness-results/${ENGINE}/"
+  S3_PREFIX="s3://${S3_BUCKET}/runs/${RUN_ID}/correctness-results/${ENGINE}"
+  if aws s3 cp "$OUTPUT_FILE" "${S3_PREFIX}/correctness-${TIMESTAMP}.json"; then
+    echo "Uploaded to: ${S3_PREFIX}/"
   else
     echo "Failed to upload to S3."
   fi

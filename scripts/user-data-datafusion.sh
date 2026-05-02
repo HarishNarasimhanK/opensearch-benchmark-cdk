@@ -4,7 +4,17 @@ exec > /var/log/user-data.log 2>&1
 
 # =============================================================================
 # user-data-datafusion.sh — Downloads pre-built DataFusion OpenSearch from S3,
-# configures it, and starts it. No build needed — the builder instance handles that.
+# configures it, and starts it with the sandbox feature flags.
+#
+# The tar.gz already contains:
+#   - OpenSearch distribution (localDistro)
+#   - 7 sandbox plugins (analytics-engine, parquet-data-format,
+#     analytics-backend-datafusion, analytics-backend-lucene,
+#     dsl-query-executor, composite-engine, test-ppl-frontend)
+#   - libopensearch_native.so in lib/
+#   - discovery-ec2 plugin (for multi-node)
+#
+# No build needed — the builder instance handles that.
 # =============================================================================
 
 S3_BUCKET="{{S3_PROFILE_BUCKET}}"
@@ -17,9 +27,13 @@ echo "$INSTANCE_ID" > /home/ec2-user/.instance-id
 chown ec2-user:ec2-user /home/ec2-user/.instance-id
 echo "Instance ID: $INSTANCE_ID"
 
-yum install -y java-21-amazon-corretto-devel cronie amazon-cloudwatch-agent
-export JAVA_HOME=/usr/lib/jvm/java-21-amazon-corretto
-echo 'export JAVA_HOME=/usr/lib/jvm/java-21-amazon-corretto' >> /etc/profile.d/java.sh
+# JDK 25 required for sandbox DataFusion (JDK 21 is not sufficient)
+echo "=== Installing JDK 25 (Corretto) ==="
+su -l ec2-user -c 'wget -q "https://corretto.aws/downloads/resources/25.0.3.9.1/amazon-corretto-25.0.3.9.1-linux-aarch64.tar.gz" -O /tmp/corretto25.tar.gz && tar xzf /tmp/corretto25.tar.gz -C $HOME && rm /tmp/corretto25.tar.gz'
+echo 'export JAVA_HOME=$HOME/amazon-corretto-25.0.3.9.1-linux-aarch64' >> /home/ec2-user/.bashrc
+echo 'export PATH=$JAVA_HOME/bin:$PATH' >> /home/ec2-user/.bashrc
+
+yum install -y cronie amazon-cloudwatch-agent
 sysctl -w vm.max_map_count=262144
 echo 'vm.max_map_count=262144' >> /etc/sysctl.conf
 
@@ -27,7 +41,7 @@ echo 'vm.max_map_count=262144' >> /etc/sysctl.conf
 cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json << 'CWCONFIG'
 {
   "metrics": {
-    "namespace": "OpenSearch/DataFusion",
+    "namespace": "OpenSearch/DataFusion/{{RUN_ID}}",
     "metrics_collected": {
       "cpu": { "measurement": ["cpu_usage_idle", "cpu_usage_user", "cpu_usage_system"], "metrics_collection_interval": 10 },
       "mem": { "measurement": ["mem_used_percent", "mem_available_percent"], "metrics_collection_interval": 10 },
@@ -35,14 +49,16 @@ cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json << 'CWCO
       "diskio": { "measurement": ["reads", "writes", "read_bytes", "write_bytes"], "metrics_collection_interval": 10 },
       "net": { "measurement": ["bytes_sent", "bytes_recv"], "metrics_collection_interval": 10 }
     },
-    "append_dimensions": { "InstanceId": "${aws:InstanceId}" }
+    "append_dimensions": { "InstanceId": "${aws:InstanceId}", "EngineRole": "datafusion" }
   },
   "logs": {
     "logs_collected": {
       "files": {
         "collect_list": [
-          { "file_path": "/var/log/user-data.log", "log_group_name": "/opensearch/datafusion/user-data", "log_stream_name": "{instance_id}" },
-          { "file_path": "/home/ec2-user/datafusion-opensearch-run.log", "log_group_name": "/opensearch/datafusion/runtime", "log_stream_name": "{instance_id}" }
+          { "file_path": "/var/log/user-data.log", "log_group_name": "/opensearch/datafusion/user-data", "log_stream_name": "{{RUN_ID}}/{instance_id}-{{NODE_NAME}}" },
+          { "file_path": "/home/ec2-user/datafusion-opensearch-run.log", "log_group_name": "/opensearch/datafusion/runtime", "log_stream_name": "{{RUN_ID}}/{instance_id}-{{NODE_NAME}}" },
+          { "file_path": "/home/ec2-user/upload-data.log", "log_group_name": "/opensearch/datafusion/upload-data", "log_stream_name": "{{RUN_ID}}/{instance_id}-{{NODE_NAME}}" },
+          { "file_path": "/home/ec2-user/profile-cron.log", "log_group_name": "/opensearch/datafusion/profiler", "log_stream_name": "{{RUN_ID}}/{instance_id}-{{NODE_NAME}}" }
         ]
       }
     }
@@ -75,17 +91,17 @@ if [ "{{CLUSTER_MODE}}" = "multi" ]; then
   cat > /home/ec2-user/datafusion-opensearch/config/opensearch.yml << 'EOF'
 cluster.name: datafusion-cluster
 network.host: _site_
-cluster.initial_cluster_manager_nodes: ["seed"]
+cluster.initial_cluster_manager_nodes: ["clusterManager-seed"]
 discovery.seed_providers: ec2
 discovery.ec2.tag.cluster: {{CLUSTER_TAG}}
 node.roles: [{{NODE_ROLES}}]
 EOF
-  if [ "{{NODE_NAME}}" = "seed" ]; then
-    echo 'node.name: seed' >> /home/ec2-user/datafusion-opensearch/config/opensearch.yml
+  if [ "{{NODE_NAME}}" = "clusterManager-seed" ]; then
+    echo 'node.name: clusterManager-seed' >> /home/ec2-user/datafusion-opensearch/config/opensearch.yml
   fi
 else
   cat > /home/ec2-user/datafusion-opensearch/config/opensearch.yml << 'EOF'
-node.name: node-1
+node.name: node
 cluster.name: datafusion-cluster
 network.host: _site_
 discovery.type: single-node
@@ -101,6 +117,8 @@ sed -i 's/^-Xmx.*/-Xmx{{JVM_HEAP}}/' /home/ec2-user/datafusion-opensearch/config
 cat > /home/ec2-user/.opensearch-env << 'ENVEOF'
 ENGINE=datafusion
 S3_BUCKET={{S3_PROFILE_BUCKET}}
+RUN_ID={{RUN_ID}}
+NODE_NAME={{NODE_NAME}}
 ENVEOF
 chown ec2-user:ec2-user /home/ec2-user/.opensearch-env
 
@@ -130,8 +148,19 @@ cat > /etc/logrotate.d/opensearch-profiler << 'LOGROTATE'
 }
 LOGROTATE
 
-# --- Step 10: Start OpenSearch ---
-su -l ec2-user -c 'nohup /home/ec2-user/datafusion-opensearch/bin/opensearch > /home/ec2-user/datafusion-opensearch-run.log 2>&1 &'
+# --- Step 10: Start OpenSearch with sandbox feature flags ---
+# Two JVM flags required for DataFusion sandbox:
+#   -Djava.library.path=...  → tells JVM where to find libopensearch_native.so
+#   -Dopensearch.experimental.feature.pluggable.dataformat.enabled=true
+#     → enables the pluggable dataformat infrastructure at the server level
+#     → without this, queries against parquet indexes fail with
+#       "acquireReader is not supported in EngineBackedIndexer"
+su -l ec2-user -c '
+export JAVA_HOME=$HOME/amazon-corretto-25.0.3.9.1-linux-aarch64
+export PATH=$JAVA_HOME/bin:$PATH
+export OPENSEARCH_JAVA_OPTS="-Djava.library.path=$HOME/datafusion-opensearch/lib -Dopensearch.experimental.feature.pluggable.dataformat.enabled=true"
+nohup $HOME/datafusion-opensearch/bin/opensearch > $HOME/datafusion-opensearch-run.log 2>&1 &
+'
 echo "OpenSearch started! Waiting for it to be ready..."
 
 # --- Step 11: Background poller — uploads data folder to S3 after benchmark completes ---

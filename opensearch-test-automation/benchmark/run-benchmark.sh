@@ -38,7 +38,16 @@ if [ -z "$OS_HOST" ] || [ -z "$ENGINE" ] || [ -z "$WORKLOAD_PATH" ]; then
   exit 1
 fi
 
-RUN_ID="${ENGINE}-$(date +%Y%m%d_%H%M%S)"
+# RUN_ID is set at deploy time via .opensearch-env, or generate one for standalone runs
+RUN_ID="${RUN_ID:-run-$(date +%Y%m%d_%H%M%S)}"
+BENCHMARK_ID="${RUN_ID}-${ENGINE}"
+TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+# DataFusion sandbox only supports single shard; Lucene uses 1 shard per data node
+if [ "$ENGINE" = "datafusion" ]; then
+  NUM_SHARDS=1
+else
+  NUM_SHARDS="${DATA_NODE_COUNT:-1}"
+fi
 RESULTS_DIR="$HOME/benchmark-results/${ENGINE}"
 mkdir -p "$RESULTS_DIR"
 
@@ -46,6 +55,8 @@ echo "============================================"
 echo "  Running ${ENGINE} Benchmark"
 echo "  Target: ${OS_HOST}:9200"
 echo "  Run ID: ${RUN_ID}"
+echo "  Benchmark ID: ${BENCHMARK_ID}"
+echo "  Shards: ${NUM_SHARDS} (1 per data node)"
 echo "============================================"
 
 # --- Wait for OpenSearch to be ready ---
@@ -72,18 +83,16 @@ for i in $(seq 1 120); do
   sleep 30
 done
 
-# --- Select test procedure and exclude list based on engine ---
-TEST_PROCEDURE="clickbench-test"
-EXCLUDE_TASKS=""
-
+# --- Select test procedure based on engine ---
 if [ "$ENGINE" = "datafusion" ]; then
   TEST_PROCEDURE="datafusion-ppl"
-  EXCLUDE_TASKS="--exclude-tasks=q20-specific-user,q24-google-urls-sorted,q25-search-phrases-by-time,q26-search-phrases-sorted,q27-search-phrases-multi-sort"
 elif [ "$ENGINE" = "lucene" ]; then
-  TEST_PROCEDURE="dsl-clickbench-test"
+  TEST_PROCEDURE="dsl-clickbench"
 fi
 
 # --- Run benchmark ---
+TELEMETRY_PARAMS='{"node-stats-sample-interval": 5, "node-stats-include-indices": true, "node-stats-include-indices-metrics": "docs,store,indexing,search,merges,segments,query_cache,fielddata,translog"}'
+
 opensearch-benchmark run \
   --pipeline="benchmark-only" \
   --workload-path="${WORKLOAD_PATH}" \
@@ -91,18 +100,21 @@ opensearch-benchmark run \
   --test-procedure="${TEST_PROCEDURE}" \
   --kill-running-processes \
   --results-format=csv \
-  --results-file="${RESULTS_DIR}/${RUN_ID}.csv" \
-  --test-run-id="${RUN_ID}" \
-  ${EXCLUDE_TASKS} \
-  --workload-params='{"ingest_percentage": 0.001, "number_of_replicas": 0, "bulk_indexing_clients": 1, "test_iterations": 5, "warmup_iterations": 1}'
+  --results-file="${RESULTS_DIR}/benchmark-${TIMESTAMP}.csv" \
+  --test-run-id="${BENCHMARK_ID}" \
+  --show-in-results=all-percentiles \
+  --telemetry=node-stats \
+  --telemetry-params="${TELEMETRY_PARAMS}" \
+  --workload-params="{\"ingest_percentage\": 0.001, \"number_of_shards\": ${NUM_SHARDS}, \"number_of_replicas\": 0, \"bulk_indexing_clients\": 1, \"test_iterations\": 20, \"warmup_iterations\": 3}"
 
-echo "Results: ${RESULTS_DIR}/${RUN_ID}.csv"
+echo "Results: ${RESULTS_DIR}/benchmark-${TIMESTAMP}.csv"
 
-# --- Upload to S3 ---
+# --- Upload benchmark CSV to S3 ---
 if [ -n "${S3_BUCKET:-}" ]; then
-  if aws s3 cp "${RESULTS_DIR}/${RUN_ID}.csv" "s3://${S3_BUCKET}/benchmark-results/${ENGINE}/${RUN_ID}.csv"; then
-    echo "Uploaded to: s3://${S3_BUCKET}/benchmark-results/${ENGINE}/${RUN_ID}.csv"
+  S3_PREFIX="s3://${S3_BUCKET}/runs/${RUN_ID}/benchmark-results/${ENGINE}"
+  if aws s3 cp "${RESULTS_DIR}/benchmark-${TIMESTAMP}.csv" "${S3_PREFIX}/benchmark-${TIMESTAMP}.csv"; then
+    echo "Uploaded CSV to: ${S3_PREFIX}/benchmark-${TIMESTAMP}.csv"
   else
-    echo "Failed to upload results to S3."
+    echo "Failed to upload CSV to S3."
   fi
 fi

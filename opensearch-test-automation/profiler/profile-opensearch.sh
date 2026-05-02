@@ -20,6 +20,13 @@ mkdir -p "$OUTPUT_DIR"
 
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 INSTANCE_ID=$(cat "$HOME/.instance-id" 2>/dev/null || hostname)
+INSTANCE_LABEL="${INSTANCE_ID}"
+if [ -n "${NODE_NAME:-}" ]; then
+  INSTANCE_LABEL="${INSTANCE_ID}-${NODE_NAME}"
+fi
+
+# RUN_ID is set at deploy time, available from .opensearch-env (already sourced)
+RUN_ID="${RUN_ID:-unknown-run}"
 
 # Find OpenSearch Java PID (the actual JVM process, not the shell wrapper)
 PID=$(pgrep -f 'org.opensearch.bootstrap.OpenSearch' | head -1 || true)
@@ -31,4 +38,4 @@ echo "Profiling OpenSearch PID: $PID"
 
 FILENAME="cpu_${TIMESTAMP}.html"
 $PROFILER -d 60 -f "$OUTPUT_DIR/$FILENAME" "$PID"
-aws s3 cp "$OUTPUT_DIR/$FILENAME" "s3://${S3_BUCKET}/profiler/${ENGINE}/${INSTANCE_ID}/$FILENAME"
+aws s3 cp "$OUTPUT_DIR/$FILENAME" "s3://${S3_BUCKET}/runs/${RUN_ID}/profiler/${ENGINE}/${INSTANCE_LABEL}/$FILENAME"

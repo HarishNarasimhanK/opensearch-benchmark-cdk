@@ -36,16 +36,14 @@ const ebsIops = parseInt(process.env.EBS_IOPS || "3000", 10);
 const ebsThroughput = parseInt(process.env.EBS_THROUGHPUT || "125", 10);
 const jvmHeap = process.env.JVM_HEAP || "8g";
 
-// --- DataFusion OpenSearch config ---
-const branch = app.node.tryGetContext("datafusionBranch") || process.env.DATAFUSION_BRANCH || "feature/datafusion";
-const opensearchRepo = app.node.tryGetContext("datafusionRepo") || process.env.DATAFUSION_REPO || "https://github.com/opensearch-project/OpenSearch.git";
-const sqlPluginRepo = process.env.DATAFUSION_SQL_REPO || "https://github.com/bharath-techie/sql.git";
-const sqlPluginBranch = process.env.DATAFUSION_SQL_BRANCH || "substrait-plan";
+// --- DataFusion OpenSearch config (sandbox main-benchmark) ---
+const branch = app.node.tryGetContext("datafusionBranch") || process.env.DATAFUSION_BRANCH || "main-benchmark";
+const opensearchRepo = app.node.tryGetContext("datafusionRepo") || process.env.DATAFUSION_REPO || "https://github.com/AjayRajNelapudi/OpenSearch.git";
 
 // --- Lucene OpenSearch config (no plugins — DSL queries only) ---
 const luceneEnabled = (process.env.LUCENE_ENABLED || "true").toLowerCase() === "true";
-const luceneRepo = process.env.LUCENE_REPO || "https://github.com/opensearch-project/OpenSearch.git";
-const luceneBranch = process.env.LUCENE_BRANCH || "main";
+const luceneRepo = app.node.tryGetContext("luceneRepo") || process.env.LUCENE_REPO || "https://github.com/opensearch-project/OpenSearch.git";
+const luceneBranch = app.node.tryGetContext("luceneBranch") || process.env.LUCENE_BRANCH || "main";
 
 // --- Cluster config ---
 const clusterMode = app.node.tryGetContext("clusterMode") || process.env.CLUSTER_MODE || "single";
@@ -55,14 +53,23 @@ const dataNodeCount = parseInt(app.node.tryGetContext("dataNodeCount") || proces
 const benchmarkEnabled = (process.env.BENCHMARK_ENABLED || "true").toLowerCase() === "true";
 const benchmarkInstanceType = process.env.BENCHMARK_INSTANCE_TYPE || "m7g.medium";
 const benchmarkEbsSizeGb = parseInt(process.env.BENCHMARK_EBS_SIZE_GB || "500", 10);
-const workloadRepo = process.env.WORKLOAD_REPO || "https://github.com/HarishNarasimhanK/opensearch-benchmark-workloads.git";
-const workloadBranch = process.env.WORKLOAD_BRANCH || "main";
+const workloadRepo = app.node.tryGetContext("workloadRepo") || process.env.WORKLOAD_REPO || "https://github.com/AjayRajNelapudi/opensearch-benchmark-workloads.git";
+const workloadBranch = app.node.tryGetContext("workloadBranch") || process.env.WORKLOAD_BRANCH || "indexing";
+
+// --- Metrics store config ---
+const metricsStoreHost = process.env.METRICS_STORE_HOST || "";
+const metricsStorePort = process.env.METRICS_STORE_PORT || "443";
+const metricsStoreSecure = process.env.METRICS_STORE_SECURE || "True";
 
 // --- Stack name ---
 const stackSuffix = process.env.STACK_SUFFIX || "";
 const stackName = stackSuffix
   ? `OpenSearchCodeGuruStack-${stackSuffix}`
   : "OpenSearchCodeGuruStack";
+
+// --- Run ID (generated at deploy time, shared across all instances) ---
+const now = new Date();
+const runId = `run-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}_${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}${String(now.getSeconds()).padStart(2, "0")}`;
 
 if (!vpcId || !subnetId || !subnetAz || !keyPairName || !securityGroupId) {
   throw new Error("VPC_ID, SUBNET_ID, SUBNET_AZ, SECURITY_GROUP_ID, and KEY_PAIR_NAME must be set in .env");
@@ -77,8 +84,6 @@ new OpenSearchCodeGuruStack(app, stackName, {
   subnetAz,
   securityGroupId,
   keyPairName,
-  sqlPluginRepo,
-  sqlPluginBranch,
   s3ProfileBucket,
   instanceType,
   ebsSizeGb,
@@ -95,4 +100,8 @@ new OpenSearchCodeGuruStack(app, stackName, {
   luceneBranch,
   clusterMode,
   dataNodeCount,
+  metricsStoreHost,
+  metricsStorePort,
+  metricsStoreSecure,
+  runId,
 });

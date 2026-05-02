@@ -11,13 +11,26 @@ set -eo pipefail
 #
 # The OpenSearch home directory is auto-detected based on ENGINE.
 #
+# Fixes applied:
+#   - Waits for data directory to exist before tarring
+#   - Robust instance ID fallback (IMDS → .instance-id file → hostname)
+#   - Reads RUN_ID from .opensearch-env (set at deploy time)
+#
 # Usage: Called as a background process from user-data:
 #   nohup bash upload-data-on-complete.sh > ~/upload-data.log 2>&1 &
 # =============================================================================
 
 source "$HOME/.opensearch-env"
 
-INSTANCE_ID=$(cat "$HOME/.instance-id" 2>/dev/null || hostname)
+# Robust instance ID: try .instance-id file, then IMDS, then hostname
+INSTANCE_ID=$(cat "$HOME/.instance-id" 2>/dev/null | tr -d '[:space:]')
+if [ -z "$INSTANCE_ID" ]; then
+  TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600" 2>/dev/null || true)
+  INSTANCE_ID=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/instance-id 2>/dev/null || true)
+fi
+if [ -z "$INSTANCE_ID" ]; then
+  INSTANCE_ID=$(hostname)
+fi
 
 # Determine OpenSearch data directory based on engine
 if [ "$ENGINE" = "datafusion" ]; then
@@ -34,17 +47,53 @@ echo "  Data Upload Poller"
 echo "  Engine: $ENGINE"
 echo "  Instance: $INSTANCE_ID"
 echo "  Data dir: $DATA_DIR"
-echo "  S3 target: s3://${S3_BUCKET}/data/${ENGINE}/${INSTANCE_ID}/data.tar.gz"
 echo "============================================"
 
+# --- Wait for benchmark-complete flag ---
+# run-all.sh deletes stale BENCHMARK_COMPLETE at the start of each run,
+# so by the time this poller starts (after tar.gz download + OpenSearch boot),
+# any old flag is already gone.
 echo "Waiting for benchmark-complete flag in S3..."
 while true; do
   if aws s3 ls "s3://${S3_BUCKET}/flags/BENCHMARK_COMPLETE" 2>/dev/null; then
-    echo "Benchmark complete! Uploading data folder..."
-    tar czf /tmp/data.tar.gz -C "$DATA_DIR" .
-    aws s3 cp /tmp/data.tar.gz "s3://${S3_BUCKET}/data/${ENGINE}/${INSTANCE_ID}/data.tar.gz"
-    rm -f /tmp/data.tar.gz
-    echo "Data folder uploaded to s3://${S3_BUCKET}/data/${ENGINE}/${INSTANCE_ID}/data.tar.gz"
+    echo "Benchmark complete flag detected!"
+
+    # RUN_ID is set at deploy time, available from .opensearch-env (already sourced)
+    echo "Run ID: $RUN_ID"
+    INSTANCE_LABEL="${INSTANCE_ID}"
+    if [ -n "${NODE_NAME:-}" ]; then
+      INSTANCE_LABEL="${INSTANCE_ID}-${NODE_NAME}"
+    fi
+    S3_TARGET="s3://${S3_BUCKET}/runs/${RUN_ID}/data/${ENGINE}/${INSTANCE_LABEL}/data.tar.gz"
+
+    # --- Wait for data directory to exist and have content ---
+    echo "Waiting for data directory to be populated..."
+    for i in $(seq 1 120); do
+      if [ -d "$DATA_DIR" ] && [ "$(ls -A "$DATA_DIR" 2>/dev/null)" ]; then
+        echo "Data directory exists and has content."
+        break
+      fi
+      if [ $i -eq 120 ]; then
+        echo "⚠️  Data directory still empty after 60 minutes. Uploading anyway."
+        break
+      fi
+      echo "  Data dir not ready yet (attempt $i/120)..."
+      sleep 30
+    done
+
+    # --- Upload ---
+    if [ -d "$DATA_DIR" ] && [ "$(ls -A "$DATA_DIR" 2>/dev/null)" ]; then
+      echo "Tarring data directory..."
+      tar czf /tmp/data.tar.gz -C "$DATA_DIR" .
+      SIZE=$(du -h /tmp/data.tar.gz | cut -f1)
+      echo "Uploading ${SIZE} to S3..."
+      aws s3 cp /tmp/data.tar.gz "$S3_TARGET"
+      rm -f /tmp/data.tar.gz
+      echo "✅ Data folder uploaded to $S3_TARGET"
+    else
+      echo "❌ Data directory does not exist or is empty: $DATA_DIR"
+      echo "   Skipping upload."
+    fi
     break
   fi
   echo "  Flag not found yet, checking again in 60s..."

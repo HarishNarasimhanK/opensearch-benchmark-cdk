@@ -16,6 +16,7 @@ source "$HOME/.opensearch-env" 2>/dev/null || true
 OS_HOST="${1:?Usage: $0 <host> <engine-name> <workload-dsl-json>}"
 ENGINE="${2:?Usage: $0 <host> <engine-name> <workload-dsl-json>}"
 DSL_FILE="${3:?Usage: $0 <host> <engine-name> <workload-dsl-json>}"
+RUN_ID="${RUN_ID:-run-$(date +%Y%m%d_%H%M%S)}"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 RESULTS_DIR="$HOME/correctness-results/${ENGINE}"
 OUTPUT_FILE="${RESULTS_DIR}/${ENGINE}-correctness-${TIMESTAMP}.json"
@@ -40,7 +41,7 @@ for i in $(seq 1 100); do
 done
 
 # --- Run queries via Python (DSL bodies are complex JSON, easier to handle in Python) ---
-export OS_HOST ENGINE DSL_FILE OUTPUT_FILE S3_BUCKET TIMESTAMP
+export OS_HOST ENGINE DSL_FILE OUTPUT_FILE S3_BUCKET TIMESTAMP RUN_ID
 
 python3 << 'PYEOF'
 import json, subprocess, os, time
@@ -51,6 +52,7 @@ dsl_file = os.environ["DSL_FILE"]
 output_file = os.environ["OUTPUT_FILE"]
 s3_bucket = os.environ.get("S3_BUCKET", "")
 timestamp = os.environ["TIMESTAMP"]
+run_id = os.environ.get("RUN_ID", "unknown")
 index = "clickbench"
 
 # Read DSL file — it's a comma-separated list of JSON objects (not a proper array)
@@ -121,7 +123,7 @@ print(f"============================================")
 
 # Upload to S3
 if s3_bucket:
-    s3_path = f"s3://{s3_bucket}/correctness-results/{engine}/{engine}-correctness-{timestamp}.json"
+    s3_path = f"s3://{s3_bucket}/runs/{run_id}/correctness-results/{engine}/{engine}-correctness-{timestamp}.json"
     ret = os.system(f'aws s3 cp "{output_file}" "{s3_path}"')
     if ret == 0:
         print(f"Uploaded to: {s3_path}")

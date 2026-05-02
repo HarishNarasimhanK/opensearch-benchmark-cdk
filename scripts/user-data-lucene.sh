@@ -27,7 +27,7 @@ echo 'vm.max_map_count=262144' >> /etc/sysctl.conf
 cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json << 'CWCONFIG'
 {
   "metrics": {
-    "namespace": "OpenSearch/Lucene",
+    "namespace": "OpenSearch/Lucene/{{RUN_ID}}",
     "metrics_collected": {
       "cpu": { "measurement": ["cpu_usage_idle", "cpu_usage_user", "cpu_usage_system"], "metrics_collection_interval": 10 },
       "mem": { "measurement": ["mem_used_percent", "mem_available_percent"], "metrics_collection_interval": 10 },
@@ -35,14 +35,16 @@ cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json << 'CWCO
       "diskio": { "measurement": ["reads", "writes", "read_bytes", "write_bytes"], "metrics_collection_interval": 10 },
       "net": { "measurement": ["bytes_sent", "bytes_recv"], "metrics_collection_interval": 10 }
     },
-    "append_dimensions": { "InstanceId": "${aws:InstanceId}" }
+    "append_dimensions": { "InstanceId": "${aws:InstanceId}", "EngineRole": "lucene" }
   },
   "logs": {
     "logs_collected": {
       "files": {
         "collect_list": [
-          { "file_path": "/var/log/user-data.log", "log_group_name": "/opensearch/lucene/user-data", "log_stream_name": "{instance_id}" },
-          { "file_path": "/home/ec2-user/lucene-opensearch-run.log", "log_group_name": "/opensearch/lucene/runtime", "log_stream_name": "{instance_id}" }
+          { "file_path": "/var/log/user-data.log", "log_group_name": "/opensearch/lucene/user-data", "log_stream_name": "{{RUN_ID}}/{instance_id}-{{NODE_NAME}}" },
+          { "file_path": "/home/ec2-user/lucene-opensearch-run.log", "log_group_name": "/opensearch/lucene/runtime", "log_stream_name": "{{RUN_ID}}/{instance_id}-{{NODE_NAME}}" },
+          { "file_path": "/home/ec2-user/upload-data.log", "log_group_name": "/opensearch/lucene/upload-data", "log_stream_name": "{{RUN_ID}}/{instance_id}-{{NODE_NAME}}" },
+          { "file_path": "/home/ec2-user/profile-cron.log", "log_group_name": "/opensearch/lucene/profiler", "log_stream_name": "{{RUN_ID}}/{instance_id}-{{NODE_NAME}}" }
         ]
       }
     }
@@ -75,17 +77,17 @@ if [ "{{CLUSTER_MODE}}" = "multi" ]; then
   cat > /home/ec2-user/lucene-opensearch/config/opensearch.yml << 'EOF'
 cluster.name: lucene-cluster
 network.host: _site_
-cluster.initial_cluster_manager_nodes: ["seed"]
+cluster.initial_cluster_manager_nodes: ["clusterManager-seed"]
 discovery.seed_providers: ec2
 discovery.ec2.tag.cluster: {{CLUSTER_TAG}}
 node.roles: [{{NODE_ROLES}}]
 EOF
-  if [ "{{NODE_NAME}}" = "seed" ]; then
-    echo 'node.name: seed' >> /home/ec2-user/lucene-opensearch/config/opensearch.yml
+  if [ "{{NODE_NAME}}" = "clusterManager-seed" ]; then
+    echo 'node.name: clusterManager-seed' >> /home/ec2-user/lucene-opensearch/config/opensearch.yml
   fi
 else
   cat > /home/ec2-user/lucene-opensearch/config/opensearch.yml << 'EOF'
-node.name: node-1
+node.name: node
 cluster.name: lucene-cluster
 network.host: _site_
 discovery.type: single-node
@@ -101,6 +103,8 @@ sed -i 's/^-Xmx.*/-Xmx{{JVM_HEAP}}/' /home/ec2-user/lucene-opensearch/config/jvm
 cat > /home/ec2-user/.opensearch-env << 'ENVEOF'
 ENGINE=lucene
 S3_BUCKET={{S3_PROFILE_BUCKET}}
+RUN_ID={{RUN_ID}}
+NODE_NAME={{NODE_NAME}}
 ENVEOF
 chown ec2-user:ec2-user /home/ec2-user/.opensearch-env
 

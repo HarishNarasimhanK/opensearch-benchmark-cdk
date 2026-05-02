@@ -2,18 +2,18 @@
 set -euo pipefail
 
 # =============================================================================
-# check-field-integrity.sh — Compares field-level null/row counts between
-# Lucene (trusted baseline) and DataFusion to verify data integrity.
+# check-field-integrity.sh — Compares field-level data between Lucene and
+# DataFusion to verify data integrity.
 #
-# For each field in the index, queries both engines for:
-#   - Total document count
-#   - Missing (null) count per field
+# Uses DSL for Lucene (standard path) and PPL for DataFusion (because DSL
+# doesn't work with the sandbox pluggable dataformat indexes).
 #
-# Outputs a comparison table and JSON report.
+# Per-field checks:
+#   1. Total count  — total docs in the index
+#   2. Null count   — docs missing a value for the field
 #
 # Usage:
 #   bash check-field-integrity.sh <lucene-host> <datafusion-host> [index-name]
-#   bash check-field-integrity.sh 172.31.84.150 internal-OpenSe-Clust-xxx.elb.amazonaws.com
 #
 # Reads S3_BUCKET from ~/.opensearch-env for uploading results.
 # =============================================================================
@@ -23,140 +23,165 @@ source "$HOME/.opensearch-env" 2>/dev/null || true
 LUCENE_HOST="${1:?Usage: $0 <lucene-host> <datafusion-host> [index-name]}"
 DATAFUSION_HOST="${2:?Usage: $0 <lucene-host> <datafusion-host> [index-name]}"
 INDEX="${3:-clickbench}"
+RUN_ID="${RUN_ID:-run-$(date +%Y%m%d_%H%M%S)}"
 
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 OUTPUT_DIR="$HOME/data-integrity-results"
 mkdir -p "$OUTPUT_DIR"
-OUTPUT_FILE="$OUTPUT_DIR/field-integrity-${TIMESTAMP}.json"
 
 echo "============================================"
-echo "  Field Integrity Check"
-echo "  Lucene:     ${LUCENE_HOST}:9200"
-echo "  DataFusion: ${DATAFUSION_HOST}:9200"
+echo "  Field Integrity Check (PPL + DSL)"
+echo "  Lucene:     ${LUCENE_HOST}:9200  (DSL)"
+echo "  DataFusion: ${DATAFUSION_HOST}:9200  (PPL)"
 echo "  Index:      ${INDEX}"
+echo "  Run ID:     ${RUN_ID}"
 echo "============================================"
 
-# --- Step 1: Get field list from Lucene mapping ---
-echo ""
-echo "Fetching field mapping from Lucene..."
-MAPPING=$(curl -s "http://${LUCENE_HOST}:9200/${INDEX}/_mapping")
-FIELDS=$(echo "$MAPPING" | python3 -c "
-import sys, json
-mapping = json.load(sys.stdin)
-# Navigate to properties — handle both flat and nested index key
+export LUCENE_HOST DATAFUSION_HOST INDEX RUN_ID TIMESTAMP OUTPUT_DIR S3_BUCKET
+
+python3 << 'PYEOF'
+import json, subprocess, os, sys
+
+lucene = os.environ["LUCENE_HOST"]
+datafusion = os.environ["DATAFUSION_HOST"]
+index = os.environ["INDEX"]
+run_id = os.environ["RUN_ID"]
+timestamp = os.environ["TIMESTAMP"]
+output_dir = os.environ["OUTPUT_DIR"]
+s3_bucket = os.environ.get("S3_BUCKET", "")
+
+def curl_json(url, method="GET", body=None):
+    cmd = ["curl", "-s", "--max-time", "30"]
+    if method == "POST":
+        cmd += ["-X", "POST"]
+    cmd += [url, "-H", "Content-Type: application/json"]
+    if body:
+        cmd += ["-d", json.dumps(body)]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=35)
+        return json.loads(r.stdout)
+    except:
+        return None
+
+def ppl_query(host, query):
+    return curl_json(f"http://{host}:9200/_analytics/ppl", method="POST",
+                     body={"query": query})
+
+# --- Step 1: Get field list and types from Lucene mapping ---
+print("\nFetching field mapping from Lucene...")
+mapping = curl_json(f"http://{lucene}:9200/{index}/_mapping")
+if not mapping:
+    print("❌ Could not fetch mapping")
+    sys.exit(1)
+
+fields = []
 for idx in mapping:
-    props = mapping[idx].get('mappings', {}).get('properties', {})
+    props = mapping[idx].get("mappings", {}).get("properties", {})
     for field in sorted(props.keys()):
-        print(field)
-" 2>/dev/null)
+        ftype = props[field].get("type", "unknown")
+        fields.append((field, ftype))
 
-if [ -z "$FIELDS" ]; then
-  echo "❌ Could not extract fields from mapping"
-  exit 1
-fi
+print(f"Found {len(fields)} fields")
 
-FIELD_COUNT=$(echo "$FIELDS" | wc -l | tr -d ' ')
-echo "Found ${FIELD_COUNT} fields"
+# --- Step 2: Get total doc count ---
+lucene_count = curl_json(f"http://{lucene}:9200/{index}/_count")
+lu_total = lucene_count.get("count", 0) if lucene_count else 0
 
-# --- Step 2: Get total doc count from both engines ---
-LUCENE_TOTAL=$(curl -s "http://${LUCENE_HOST}:9200/${INDEX}/_count" | python3 -c "import sys,json; print(json.load(sys.stdin).get('count',0))" 2>/dev/null || echo "0")
-DF_TOTAL=$(curl -s "http://${DATAFUSION_HOST}:9200/${INDEX}/_count" | python3 -c "import sys,json; print(json.load(sys.stdin).get('count',0))" 2>/dev/null || echo "0")
+df_count = ppl_query(datafusion, f"source = {index} | stats count()")
+df_total = df_count.get("rows", df_count.get("datarows", [[0]]))[0][0] if df_count else 0
 
-echo "Lucene total docs:     ${LUCENE_TOTAL}"
-echo "DataFusion total docs: ${DF_TOTAL}"
-echo ""
+print(f"Lucene total docs:     {lu_total}")
+print(f"DataFusion total docs: {df_total}")
+print()
 
-# --- Step 3: For each field, query missing (null) count ---
-echo "Checking each field..."
-echo ""
-printf "%-30s | %12s | %12s | %12s | %12s | %s\n" "Field" "Lucene Total" "Lucene Nulls" "DF Total" "DF Nulls" "Match?"
-printf "%-30s-+-%12s-+-%12s-+-%12s-+-%12s-+-%s\n" "------------------------------" "------------" "------------" "------------" "------------" "------"
+# --- Step 3: Per-field checks ---
+print("Running per-field checks...")
+print()
+header = f"{'Field':<30} | {'Type':<10} | {'LU Total':>8} | {'LU Nulls':>8} | {'DF Total':>8} | {'DF Nulls':>8} | Status"
+sep    = f"{'-'*30}-+-{'-'*10}-+-{'-'*8}-+-{'-'*8}-+-{'-'*8}-+-{'-'*8}-+-{'-'*6}"
+print(header)
+print(sep)
 
-PASS_COUNT=0
-FAIL_COUNT=0
-RESULTS="[]"
+results = []
+pass_count = 0
+fail_count = 0
 
-while IFS= read -r FIELD; do
-  # Query Lucene for missing count
-  LUCENE_MISSING=$(curl -s "http://${LUCENE_HOST}:9200/${INDEX}/_search" \
-    -H 'Content-Type: application/json' \
-    -d "{\"size\":0,\"aggs\":{\"missing_field\":{\"missing\":{\"field\":\"${FIELD}\"}}}}" \
-    | python3 -c "import sys,json; print(json.load(sys.stdin).get('aggregations',{}).get('missing_field',{}).get('doc_count',0))" 2>/dev/null || echo "-1")
+for field, ftype in fields:
+    # Lucene: DSL missing aggregation
+    lu_resp = curl_json(f"http://{lucene}:9200/{index}/_search", method="POST",
+                        body={"size": 0, "aggs": {"m": {"missing": {"field": field}}}})
+    lu_nulls = lu_resp.get("aggregations", {}).get("m", {}).get("doc_count", -1) if lu_resp else -1
 
-  # Query DataFusion for missing count
-  DF_MISSING=$(curl -s "http://${DATAFUSION_HOST}:9200/${INDEX}/_search" \
-    -H 'Content-Type: application/json' \
-    -d "{\"size\":0,\"aggs\":{\"missing_field\":{\"missing\":{\"field\":\"${FIELD}\"}}}}" \
-    | python3 -c "import sys,json; print(json.load(sys.stdin).get('aggregations',{}).get('missing_field',{}).get('doc_count',0))" 2>/dev/null || echo "-1")
+    # DataFusion: PPL isnull()
+    df_resp = ppl_query(datafusion, f"source = {index} | where isnull({field}) | stats count()")
+    df_nulls = df_resp.get("rows", df_resp.get("datarows", [[-1]]))[0][0] if df_resp and ("rows" in df_resp or "datarows" in df_resp) else -1
 
-  # Compare
-  if [ "$LUCENE_TOTAL" = "$DF_TOTAL" ] && [ "$LUCENE_MISSING" = "$DF_MISSING" ]; then
-    MATCH="✅"
-    PASS_COUNT=$((PASS_COUNT + 1))
-  else
-    MATCH="❌"
-    FAIL_COUNT=$((FAIL_COUNT + 1))
-  fi
+    match = (lu_total == df_total) and (lu_nulls == df_nulls)
+    status = "✅" if match else "❌"
 
-  printf "%-30s | %12s | %12s | %12s | %12s | %s\n" "$FIELD" "$LUCENE_TOTAL" "$LUCENE_MISSING" "$DF_TOTAL" "$DF_MISSING" "$MATCH"
+    if match:
+        pass_count += 1
+    else:
+        fail_count += 1
 
-  # Append to JSON results
-  RESULTS=$(echo "$RESULTS" | python3 -c "
-import sys, json
-results = json.load(sys.stdin)
-results.append({
-    'field': '${FIELD}',
-    'lucene_total': ${LUCENE_TOTAL},
-    'lucene_nulls': ${LUCENE_MISSING},
-    'datafusion_total': ${DF_TOTAL},
-    'datafusion_nulls': ${DF_MISSING},
-    'match': ${LUCENE_TOTAL} == ${DF_TOTAL} and ${LUCENE_MISSING} == ${DF_MISSING}
-})
-print(json.dumps(results))
-" 2>/dev/null)
+    print(f"{field:<30} | {ftype:<10} | {lu_total:>8} | {lu_nulls:>8} | {df_total:>8} | {df_nulls:>8} | {status}")
 
-done <<< "$FIELDS"
+    results.append({
+        "field": field,
+        "type": ftype,
+        "lucene_total": lu_total,
+        "lucene_nulls": lu_nulls,
+        "datafusion_total": df_total,
+        "datafusion_nulls": df_nulls,
+        "match": match,
+    })
 
 # --- Step 4: Write JSON report ---
-echo "$RESULTS" | python3 -c "
-import sys, json
-results = json.load(sys.stdin)
 report = {
-    'timestamp': '${TIMESTAMP}',
-    'index': '${INDEX}',
-    'lucene_host': '${LUCENE_HOST}',
-    'datafusion_host': '${DATAFUSION_HOST}',
-    'lucene_total_docs': ${LUCENE_TOTAL},
-    'datafusion_total_docs': ${DF_TOTAL},
-    'total_fields': ${FIELD_COUNT},
-    'pass': ${PASS_COUNT},
-    'fail': ${FAIL_COUNT},
-    'fields': results
+    "timestamp": timestamp,
+    "run_id": run_id,
+    "index": index,
+    "lucene_host": lucene,
+    "datafusion_host": datafusion,
+    "query_methods": {
+        "lucene": "DSL (_count, missing agg)",
+        "datafusion": "PPL (stats count(), isnull())",
+    },
+    "lucene_total_docs": lu_total,
+    "datafusion_total_docs": df_total,
+    "total_docs_match": lu_total == df_total,
+    "total_fields": len(fields),
+    "pass": pass_count,
+    "fail": fail_count,
+    "fields": results,
 }
-print(json.dumps(report, indent=2))
-" > "$OUTPUT_FILE"
 
-echo ""
-echo "============================================"
-echo "  Field Integrity Check Complete"
-echo "  Total: ${FIELD_COUNT} | Pass: ${PASS_COUNT} | Fail: ${FAIL_COUNT}"
-echo "  Output: ${OUTPUT_FILE}"
-echo "============================================"
+json_file = f"{output_dir}/field-integrity-{timestamp}.json"
+with open(json_file, "w") as f:
+    json.dump(report, f, indent=2)
+
+print()
+print("============================================")
+print(f"  Field Integrity Check Complete")
+print(f"  Total docs:  Lucene={lu_total}  DataFusion={df_total}")
+print(f"  Fields:      {len(fields)} total | {pass_count} pass | {fail_count} fail")
+print(f"  Output:      {json_file}")
+print("============================================")
 
 # --- Step 5: Upload to S3 ---
-if [ -n "${S3_BUCKET:-}" ]; then
-  # Upload JSON
-  aws s3 cp "$OUTPUT_FILE" "s3://${S3_BUCKET}/data-integrity/field-integrity-${TIMESTAMP}.json"
-  echo "Uploaded JSON: s3://${S3_BUCKET}/data-integrity/field-integrity-${TIMESTAMP}.json"
+if s3_bucket:
+    s3_prefix = f"s3://{s3_bucket}/runs/{run_id}/data-integrity"
 
-  # Generate and upload CSV (opens in Excel)
-  CSV_FILE="$OUTPUT_DIR/field-integrity-${TIMESTAMP}.csv"
-  echo "Field,Lucene_Total,Lucene_Nulls,DataFusion_Total,DataFusion_Nulls,Match" > "$CSV_FILE"
-  echo "$RESULTS" | python3 -c "
-import sys, json
-for r in json.load(sys.stdin):
-    print(f\"{r['field']},{r['lucene_total']},{r['lucene_nulls']},{r['datafusion_total']},{r['datafusion_nulls']},{r['match']}\")
-" >> "$CSV_FILE"
-  aws s3 cp "$CSV_FILE" "s3://${S3_BUCKET}/data-integrity/field-integrity-${TIMESTAMP}.csv"
-  echo "Uploaded CSV:  s3://${S3_BUCKET}/data-integrity/field-integrity-${TIMESTAMP}.csv"
-fi
+    os.system(f'aws s3 cp "{json_file}" "{s3_prefix}/field-integrity-{timestamp}.json"')
+    print(f"Uploaded JSON: {s3_prefix}/field-integrity-{timestamp}.json")
+
+    csv_file = f"{output_dir}/field-integrity-{timestamp}.csv"
+    with open(csv_file, "w") as f:
+        f.write("Field,Type,Lucene_Total,Lucene_Nulls,DataFusion_Total,DataFusion_Nulls,Match\n")
+        for r in results:
+            f.write(f"{r['field']},{r['type']},{r['lucene_total']},{r['lucene_nulls']},{r['datafusion_total']},{r['datafusion_nulls']},{r['match']}\n")
+
+    os.system(f'aws s3 cp "{csv_file}" "{s3_prefix}/field-integrity-{timestamp}.csv"')
+    print(f"Uploaded CSV:  {s3_prefix}/field-integrity-{timestamp}.csv")
+
+PYEOF

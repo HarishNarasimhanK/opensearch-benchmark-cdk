@@ -16,8 +16,6 @@ interface OpenSearchCodeGuruStackProps extends cdk.StackProps {
   subnetAz: string;
   securityGroupId: string;
   keyPairName: string;
-  sqlPluginRepo: string;
-  sqlPluginBranch: string;
   s3ProfileBucket: string;
   instanceType: string;
   ebsSizeGb: number;
@@ -34,6 +32,10 @@ interface OpenSearchCodeGuruStackProps extends cdk.StackProps {
   luceneBranch: string;
   clusterMode: string;
   dataNodeCount: number;
+  metricsStoreHost: string;
+  metricsStorePort: string;
+  metricsStoreSecure: string;
+  runId: string;
 }
 
 export class OpenSearchCodeGuruStack extends cdk.Stack {
@@ -41,10 +43,10 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
     super(scope, id, props);
 
     const { branch, opensearchRepo, vpcId, subnetId, subnetAz, securityGroupId, keyPairName,
-      sqlPluginRepo, sqlPluginBranch, s3ProfileBucket, instanceType, ebsSizeGb, ebsIops,
+      s3ProfileBucket, instanceType, ebsSizeGb, ebsIops,
       ebsThroughput, jvmHeap, benchmarkEnabled, benchmarkInstanceType, benchmarkEbsSizeGb,
       workloadRepo, workloadBranch, luceneEnabled, luceneRepo, luceneBranch,
-      clusterMode, dataNodeCount } = props;
+      clusterMode, dataNodeCount, metricsStoreHost, metricsStorePort, metricsStoreSecure, runId } = props;
 
     const isMultiNode = clusterMode === "multi";
     const clusterTag = `${id}-datafusion-cluster`;
@@ -127,9 +129,12 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
         .replace(/\{\{CLUSTER_MODE\}\}/g, clusterMode)
         .replace(/\{\{CLUSTER_TAG\}\}/g, clusterTag)
         .replace(/\{\{NODE_NAME\}\}/g, nodeName)
-        .replace(/\{\{NODE_ROLES\}\}/g, nodeRoles);
+        .replace(/\{\{NODE_ROLES\}\}/g, nodeRoles)
+        .replace(/\{\{RUN_ID\}\}/g, runId);
 
       const inst = createInstance(nodeId, ltId, script, instanceType, ebsSizeGb, ebsIops, ebsThroughput);
+      const nameTag = nodeName ? `${id}-DataFusion-${runId}-${nodeName}` : `${id}-DataFusion-${runId}`;
+      cdk.Tags.of(inst).add("Name", nameTag);
 
       if (isMultiNode) {
         cdk.Tags.of(inst).add("cluster", clusterTag);
@@ -142,15 +147,15 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
     // Builder Instance — builds both DataFusion and Lucene, uploads tar.gz to S3
     // =========================================================================
     const builderScript = fs.readFileSync(path.join(__dirname, "..", "scripts", "user-data-builder.sh"), "utf-8")
-      .replace(/\{\{BRANCH\}\}/g, branch)
-      .replace(/\{\{OPENSEARCH_REPO\}\}/g, opensearchRepo)
-      .replace(/\{\{SQL_PLUGIN_REPO\}\}/g, sqlPluginRepo)
-      .replace(/\{\{SQL_PLUGIN_BRANCH\}\}/g, sqlPluginBranch)
+      .replace(/\{\{DATAFUSION_BRANCH\}\}/g, branch)
+      .replace(/\{\{DATAFUSION_REPO\}\}/g, opensearchRepo)
       .replace(/\{\{LUCENE_BRANCH\}\}/g, luceneBranch)
       .replace(/\{\{LUCENE_REPO\}\}/g, luceneRepo)
-      .replace(/\{\{S3_PROFILE_BUCKET\}\}/g, s3ProfileBucket);
+      .replace(/\{\{S3_PROFILE_BUCKET\}\}/g, s3ProfileBucket)
+      .replace(/\{\{RUN_ID\}\}/g, runId);
 
     const builderInstance = createInstance("BuilderInstance", "BuilderLt", builderScript, instanceType, ebsSizeGb, ebsIops, ebsThroughput);
+    cdk.Tags.of(builderInstance).add("Name", `${id}-Builder-${runId}`);
 
     new cdk.CfnOutput(this, "A1_BuilderSSH", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${builderInstance.instancePublicDnsName}` });
     new cdk.CfnOutput(this, "A2_BuilderLog", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${builderInstance.instancePublicDnsName} "tail -f /var/log/user-data.log"` });
@@ -162,16 +167,16 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
 
     if (isMultiNode) {
       // --- Multi-node: 3 managers + N data nodes + internal ALB ---
-      const seedManager = createDataFusionInstance("SeedManager", "SeedManagerLt", "seed", "cluster_manager");
+      const seedManager = createDataFusionInstance("SeedManager", "SeedManagerLt", "clusterManager-seed", "cluster_manager");
       new cdk.CfnOutput(this, "B1_SeedManagerSSH", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${seedManager.instancePublicDnsName}` });
 
       for (let i = 2; i <= 3; i++) {
-        createDataFusionInstance(`Manager${i}`, `Manager${i}Lt`, `manager-${i}`, "cluster_manager");
+        createDataFusionInstance(`Manager${i}`, `Manager${i}Lt`, `clusterManager-${i}`, "cluster_manager");
       }
 
       const dataInstances: ec2.Instance[] = [];
       for (let i = 1; i <= dataNodeCount; i++) {
-        const data = createDataFusionInstance(`DataNode${i}`, `DataNode${i}Lt`, `data-${i}`, "data, ingest");
+        const data = createDataFusionInstance(`DataNode${i}`, `DataNode${i}Lt`, `dataNode-${i}`, "data, ingest");
         dataInstances.push(data);
         new cdk.CfnOutput(this, `B2DataNode${i}SSH`, { value: `ssh -i ~/${keyPairName}.pem ec2-user@${data.instancePublicDnsName}` });
       }
@@ -203,7 +208,7 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
 
     } else {
       // --- Single-node (default) ---
-      const instance = createDataFusionInstance("OpenSearchInstance", "OpenSearchLt", "node-1", "");
+      const instance = createDataFusionInstance("DataFusionInstance", "DataFusionLt", "node", "");
       datafusionEndpoint = instance.instancePrivateIp;
 
       new cdk.CfnOutput(this, "B1_DataFusionSSH", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${instance.instancePublicDnsName}` });
@@ -228,9 +233,12 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
           .replace(/\{\{CLUSTER_MODE\}\}/g, clusterMode)
           .replace(/\{\{CLUSTER_TAG\}\}/g, luceneClusterTag)
           .replace(/\{\{NODE_NAME\}\}/g, nodeName)
-          .replace(/\{\{NODE_ROLES\}\}/g, nodeRoles);
+          .replace(/\{\{NODE_ROLES\}\}/g, nodeRoles)
+          .replace(/\{\{RUN_ID\}\}/g, runId);
 
         const inst = createInstance(nodeId, ltId, script, instanceType, ebsSizeGb, ebsIops, ebsThroughput);
+        const nameTag = nodeName ? `${id}-Lucene-${runId}-${nodeName}` : `${id}-Lucene-${runId}`;
+        cdk.Tags.of(inst).add("Name", nameTag);
 
         if (isMultiNode) {
           cdk.Tags.of(inst).add("cluster", luceneClusterTag);
@@ -241,16 +249,16 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
 
       if (isMultiNode) {
         // --- Multi-node: 3 managers + N data nodes + internal ALB ---
-        const luceneSeedManager = createLuceneInstance("LuceneSeedManager", "LuceneSeedManagerLt", "seed", "cluster_manager");
+        const luceneSeedManager = createLuceneInstance("LuceneSeedManager", "LuceneSeedManagerLt", "clusterManager-seed", "cluster_manager");
         new cdk.CfnOutput(this, "C1_LuceneSeedManagerSSH", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${luceneSeedManager.instancePublicDnsName}` });
 
         for (let i = 2; i <= 3; i++) {
-          createLuceneInstance(`LuceneManager${i}`, `LuceneManager${i}Lt`, `manager-${i}`, "cluster_manager");
+          createLuceneInstance(`LuceneManager${i}`, `LuceneManager${i}Lt`, `clusterManager-${i}`, "cluster_manager");
         }
 
         const luceneDataInstances: ec2.Instance[] = [];
         for (let i = 1; i <= dataNodeCount; i++) {
-          const data = createLuceneInstance(`LuceneDataNode${i}`, `LuceneDataNode${i}Lt`, `data-${i}`, "data, ingest");
+          const data = createLuceneInstance(`LuceneDataNode${i}`, `LuceneDataNode${i}Lt`, `dataNode-${i}`, "data, ingest");
           luceneDataInstances.push(data);
           new cdk.CfnOutput(this, `C2LuceneDataNode${i}SSH`, { value: `ssh -i ~/${keyPairName}.pem ec2-user@${data.instancePublicDnsName}` });
         }
@@ -282,7 +290,7 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
 
       } else {
         // --- Single-node (default) ---
-        const luceneInstance = createLuceneInstance("LuceneInstance", "LuceneLt", "node-1", "");
+        const luceneInstance = createLuceneInstance("LuceneInstance", "LuceneLt", "node", "");
         luceneEndpoint = luceneInstance.instancePrivateIp;
 
         new cdk.CfnOutput(this, "C1_LuceneSSH", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${luceneInstance.instancePublicDnsName}` });
@@ -301,13 +309,33 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
         .replace(/\{\{DATAFUSION_PRIVATE_IP\}\}/g, datafusionEndpoint)
         .replace(/\{\{LUCENE_PRIVATE_IP\}\}/g, luceneEndpoint)
         .replace(/\{\{S3_PROFILE_BUCKET\}\}/g, s3ProfileBucket)
-        .replace(/\{\{SCRIPTS_S3_PATH\}\}/g, scriptsS3Path);
+        .replace(/\{\{SCRIPTS_S3_PATH\}\}/g, scriptsS3Path)
+        .replace(/\{\{DATA_NODE_COUNT\}\}/g, String(isMultiNode ? dataNodeCount : 1))
+        .replace(/\{\{METRICS_STORE_HOST\}\}/g, metricsStoreHost)
+        .replace(/\{\{METRICS_STORE_PORT\}\}/g, metricsStorePort)
+        .replace(/\{\{METRICS_STORE_SECURE\}\}/g, metricsStoreSecure)
+        .replace(/\{\{RUN_ID\}\}/g, runId);
 
       const benchmarkInstance = createInstance("BenchmarkInstance", "BenchmarkLt", benchmarkScript, benchmarkInstanceType, benchmarkEbsSizeGb);
+      cdk.Tags.of(benchmarkInstance).add("Name", `${id}-Benchmark-${runId}`);
 
       new cdk.CfnOutput(this, "D1_BenchmarkSSH", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${benchmarkInstance.instancePublicDnsName}` });
       new cdk.CfnOutput(this, "D2_BenchmarkSetupLog", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${benchmarkInstance.instancePublicDnsName} "tail -f /var/log/user-data.log"` });
       new cdk.CfnOutput(this, "D3_BenchmarkRunLog", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${benchmarkInstance.instancePublicDnsName} "tail -f ~/benchmark-run.log"` });
     }
+
+    // =========================================================================
+    // Metrics Store
+    // =========================================================================
+    if (metricsStoreHost) {
+      new cdk.CfnOutput(this, "E1_MetricsStoreEndpoint", { value: `https://${metricsStoreHost}` });
+      new cdk.CfnOutput(this, "E2_MetricsStoreDashboard", { value: `https://${metricsStoreHost}/_dashboards (access via SSH tunnel: ssh -i ~/${keyPairName}.pem -L 5601:${metricsStoreHost}:443 ec2-user@<benchmark-dns> then open https://localhost:5601/_dashboards)` });
+    }
+
+    // =========================================================================
+    // Run ID
+    // =========================================================================
+    new cdk.CfnOutput(this, "F1_RunID", { value: runId });
+    new cdk.CfnOutput(this, "F2_S3ResultsPath", { value: `s3://${s3ProfileBucket}/runs/${runId}/` });
   }
 }
