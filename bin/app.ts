@@ -55,6 +55,8 @@ const benchmarkInstanceType = process.env.BENCHMARK_INSTANCE_TYPE || "m7g.medium
 const benchmarkEbsSizeGb = parseInt(process.env.BENCHMARK_EBS_SIZE_GB || "500", 10);
 const workloadRepo = app.node.tryGetContext("workloadRepo") || process.env.WORKLOAD_REPO || "https://github.com/AjayRajNelapudi/opensearch-benchmark-workloads.git";
 const workloadBranch = app.node.tryGetContext("workloadBranch") || process.env.WORKLOAD_BRANCH || "indexing";
+const testIterations = parseInt(app.node.tryGetContext("testIterations") || process.env.TEST_ITERATIONS || "20", 10);
+const ingestPercentage = parseFloat(app.node.tryGetContext("ingestPercentage") || process.env.INGEST_PERCENTAGE || "0.001");
 
 // --- Metrics store config ---
 const metricsStoreHost = process.env.METRICS_STORE_HOST || "";
@@ -95,6 +97,8 @@ new OpenSearchCodeGuruStack(app, stackName, {
   benchmarkEbsSizeGb,
   workloadRepo,
   workloadBranch,
+  testIterations,
+  ingestPercentage,
   luceneEnabled,
   luceneRepo,
   luceneBranch,

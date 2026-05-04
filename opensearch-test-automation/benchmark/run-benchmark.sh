@@ -57,6 +57,8 @@ echo "  Target: ${OS_HOST}:9200"
 echo "  Run ID: ${RUN_ID}"
 echo "  Benchmark ID: ${BENCHMARK_ID}"
 echo "  Shards: ${NUM_SHARDS} (1 per data node)"
+echo "  Test iterations: ${TEST_ITERATIONS:-20}"
+echo "  Ingest percentage: ${INGEST_PERCENTAGE:-0.001}"
 echo "============================================"
 
 # --- Wait for OpenSearch to be ready ---
@@ -93,6 +95,13 @@ fi
 # --- Run benchmark ---
 TELEMETRY_PARAMS='{"node-stats-sample-interval": 5, "node-stats-include-indices": true, "node-stats-include-indices-metrics": "docs,store,indexing,search,merges,segments,query_cache,fielddata,translog"}'
 
+BENCH_START=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+BENCH_START_EPOCH=$(date +%s)
+echo ""
+echo "-----------------------------------"
+echo "[INFO] [${ENGINE}] Benchmark START: ${BENCH_START}"
+echo "-----------------------------------"
+
 opensearch-benchmark run \
   --pipeline="benchmark-only" \
   --workload-path="${WORKLOAD_PATH}" \
@@ -100,20 +109,36 @@ opensearch-benchmark run \
   --test-procedure="${TEST_PROCEDURE}" \
   --kill-running-processes \
   --results-format=csv \
-  --results-file="${RESULTS_DIR}/benchmark-${TIMESTAMP}.csv" \
+  --results-file="${RESULTS_DIR}/${ENGINE}-benchmark-${TIMESTAMP}.csv" \
   --test-run-id="${BENCHMARK_ID}" \
   --show-in-results=all-percentiles \
   --telemetry=node-stats \
   --telemetry-params="${TELEMETRY_PARAMS}" \
-  --workload-params="{\"ingest_percentage\": 0.001, \"number_of_shards\": ${NUM_SHARDS}, \"number_of_replicas\": 0, \"bulk_indexing_clients\": 1, \"test_iterations\": 20, \"warmup_iterations\": 3}"
+  --workload-params="{\"ingest_percentage\": ${INGEST_PERCENTAGE:-0.001}, \"number_of_shards\": ${NUM_SHARDS}, \"number_of_replicas\": 0, \"bulk_indexing_clients\": 1, \"test_iterations\": ${TEST_ITERATIONS:-20}, \"warmup_iterations\": 3}" \
+  && OSB_EXIT=0 || OSB_EXIT=$?
+BENCH_END=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+BENCH_END_EPOCH=$(date +%s)
+BENCH_DURATION=$((BENCH_END_EPOCH - BENCH_START_EPOCH))
 
-echo "Results: ${RESULTS_DIR}/benchmark-${TIMESTAMP}.csv"
+echo ""
+echo "-----------------------------------"
+if [ $OSB_EXIT -eq 0 ]; then
+  echo "[INFO] [${ENGINE}] ✅ SUCCESS (took ${BENCH_DURATION} seconds)"
+else
+  echo "[WARN] [${ENGINE}] ⚠️  FINISHED WITH ERRORS (exit code: ${OSB_EXIT}, took ${BENCH_DURATION} seconds)"
+fi
+echo "[INFO] [${ENGINE}] Benchmark START: ${BENCH_START}"
+echo "[INFO] [${ENGINE}] Benchmark END:   ${BENCH_END}"
+echo "[INFO] [${ENGINE}] Duration:        ${BENCH_DURATION}s ($((BENCH_DURATION / 60))m $((BENCH_DURATION % 60))s)"
+echo "-----------------------------------"
+
+echo "Results: ${RESULTS_DIR}/${ENGINE}-benchmark-${TIMESTAMP}.csv"
 
 # --- Upload benchmark CSV to S3 ---
 if [ -n "${S3_BUCKET:-}" ]; then
   S3_PREFIX="s3://${S3_BUCKET}/runs/${RUN_ID}/benchmark-results/${ENGINE}"
-  if aws s3 cp "${RESULTS_DIR}/benchmark-${TIMESTAMP}.csv" "${S3_PREFIX}/benchmark-${TIMESTAMP}.csv"; then
-    echo "Uploaded CSV to: ${S3_PREFIX}/benchmark-${TIMESTAMP}.csv"
+  if aws s3 cp "${RESULTS_DIR}/${ENGINE}-benchmark-${TIMESTAMP}.csv" "${S3_PREFIX}/${ENGINE}-benchmark-${TIMESTAMP}.csv"; then
+    echo "Uploaded CSV to: ${S3_PREFIX}/${ENGINE}-benchmark-${TIMESTAMP}.csv"
   else
     echo "Failed to upload CSV to S3."
   fi

@@ -10,8 +10,8 @@ set -euo pipefail
 #   s3://bucket/runs/<RUN_ID>/data-integrity/...
 #   s3://bucket/runs/<RUN_ID>/data/<engine>/<instance-id>/data.tar.gz
 #
-# Lucene runs first (builds faster — no plugins needed).
-# DataFusion runs second (builds slower — needs sandbox plugins + Rust native lib).
+# DataFusion runs first, Lucene runs second.
+# Both run sequentially — OSB does not allow two instances on the same machine.
 #
 # Reads config from ~/.opensearch-env:
 #   DATAFUSION_HOST              — DataFusion OpenSearch private IP or ALB DNS
@@ -52,7 +52,7 @@ opensearch.src.subdir = OpenSearch
 [benchmarks]
 local.dataset.cache = /home/ec2-user/.osb/benchmarks/data
 
-[results_publishing]
+[reporting]
 datastore.type = opensearch
 datastore.host = ${METRICS_STORE_HOST}
 datastore.port = ${METRICS_STORE_PORT:-443}
@@ -84,12 +84,32 @@ echo "  DataFusion host: ${DATAFUSION_HOST} (PPL queries)"
 echo "  S3 prefix:       s3://${S3_BUCKET}/runs/${RUN_ID}/"
 echo "============================================"
 
+ORCHESTRATOR_START=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+ORCHESTRATOR_START_EPOCH=$(date +%s)
+echo "[INFO] Orchestrator start: ${ORCHESTRATOR_START}"
+
 # --- Clean stale flags from previous runs ---
 echo ""
 echo "Cleaning stale flags from previous runs..."
 aws s3 rm "s3://${S3_BUCKET}/flags/BENCHMARK_COMPLETE" 2>/dev/null || true
 
-# --- Lucene first (builds faster, ready sooner) ---
+# --- Run benchmarks + correctness sequentially ---
+# OSB does not allow two instances on the same machine.
+# DataFusion runs first, then Lucene.
+
+echo ""
+echo ">>> Running DataFusion benchmark (PPL queries)..."
+bash "$REPO_DIR/benchmark/run-benchmark.sh" \
+  --host "$DATAFUSION_HOST" \
+  --engine datafusion \
+  --workload "$WORKLOAD_PATH_DATAFUSION" \
+  2>&1 | tee "$HOME/benchmark-datafusion.log"
+
+echo ""
+echo ">>> Running DataFusion correctness test..."
+bash "$REPO_DIR/correctness/run-datafusion-correctness-test.sh" "$DATAFUSION_HOST" "datafusion" \
+  2>&1 | tee "$HOME/correctness-datafusion.log"
+
 if [ -n "${LUCENE_HOST:-}" ]; then
   echo ""
   echo ">>> Running Lucene benchmark (DSL queries)..."
@@ -100,26 +120,12 @@ if [ -n "${LUCENE_HOST:-}" ]; then
     2>&1 | tee "$HOME/benchmark-lucene.log"
 
   echo ""
-  echo ">>> Running Lucene correctness test (DSL queries)..."
+  echo ">>> Running Lucene correctness test..."
   bash "$REPO_DIR/correctness/run-lucene-correctness-test.sh" "$LUCENE_HOST" "lucene" "$WORKLOAD_PATH_LUCENE/operations/dsl.json" \
     2>&1 | tee "$HOME/correctness-lucene.log"
 else
-  echo "Lucene instance not enabled, skipping Lucene benchmark and correctness."
+  echo "Lucene instance not enabled, skipping."
 fi
-
-# --- DataFusion second (builds slower, needs more time) ---
-echo ""
-echo ">>> Running DataFusion benchmark (PPL queries)..."
-bash "$REPO_DIR/benchmark/run-benchmark.sh" \
-  --host "$DATAFUSION_HOST" \
-  --engine datafusion \
-  --workload "$WORKLOAD_PATH_DATAFUSION" \
-  2>&1 | tee "$HOME/benchmark-datafusion.log"
-
-echo ""
-echo ">>> Running DataFusion correctness test (PPL queries)..."
-bash "$REPO_DIR/correctness/run-datafusion-correctness-test.sh" "$DATAFUSION_HOST" "datafusion" \
-  2>&1 | tee "$HOME/correctness-datafusion.log"
 
 echo ""
 echo "============================================"
@@ -138,6 +144,30 @@ else
   echo "Lucene not enabled, skipping field integrity check."
 fi
 
+# --- Generate comparison visualization ---
+echo ""
+echo ">>> Generating benchmark comparison dashboard..."
+DF_CSV=$(ls -t "$HOME/benchmark-results/datafusion/"*.csv 2>/dev/null | head -1)
+LU_CSV=$(ls -t "$HOME/benchmark-results/lucene/"*.csv 2>/dev/null | head -1)
+
+if [ -n "$DF_CSV" ] && [ -n "$LU_CSV" ]; then
+  python3 "$REPO_DIR/visualization/generate-comparison.py" \
+    --datafusion-csv "$DF_CSV" \
+    --lucene-csv "$LU_CSV" \
+    --output "$HOME/benchmark-comparison.html" \
+    --run-id "$RUN_ID" \
+    2>&1 | tee "$HOME/visualization.log"
+
+  # Upload to S3
+  if [ -f "$HOME/benchmark-comparison.html" ]; then
+    aws s3 cp "$HOME/benchmark-comparison.html" \
+      "s3://${S3_BUCKET}/runs/${RUN_ID}/benchmark-results/benchmark-comparison.html"
+    echo "Dashboard uploaded to: s3://${S3_BUCKET}/runs/${RUN_ID}/benchmark-results/benchmark-comparison.html"
+  fi
+else
+  echo "Skipping dashboard — missing benchmark CSVs (DF=$DF_CSV, LU=$LU_CSV)"
+fi
+
 # --- Signal data nodes to upload their data folders ---
 echo ""
 echo "Uploading benchmark-complete flag to S3..."
@@ -146,6 +176,12 @@ echo "Flag uploaded — data nodes will upload their data folders shortly."
 
 echo ""
 echo "============================================"
+ORCHESTRATOR_END=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+ORCHESTRATOR_END_EPOCH=$(date +%s)
+ORCHESTRATOR_DURATION=$((ORCHESTRATOR_END_EPOCH - ORCHESTRATOR_START_EPOCH))
 echo "  Run complete: ${RUN_ID}"
 echo "  All results at: s3://${S3_BUCKET}/runs/${RUN_ID}/"
+echo "  Start: ${ORCHESTRATOR_START}"
+echo "  End:   ${ORCHESTRATOR_END}"
+echo "  Total: ${ORCHESTRATOR_DURATION}s ($((ORCHESTRATOR_DURATION / 60))m $((ORCHESTRATOR_DURATION % 60))s)"
 echo "============================================"

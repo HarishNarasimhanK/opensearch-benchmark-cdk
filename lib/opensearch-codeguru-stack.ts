@@ -4,6 +4,7 @@ import * as iam from "aws-cdk-lib/aws-iam";
 import * as elbv2 from "aws-cdk-lib/aws-elasticloadbalancingv2";
 import * as targets from "aws-cdk-lib/aws-elasticloadbalancingv2-targets";
 import * as s3assets from "aws-cdk-lib/aws-s3-assets";
+import * as cw from "aws-cdk-lib/aws-cloudwatch";
 import { Construct } from "constructs";
 import * as fs from "fs";
 import * as path from "path";
@@ -27,6 +28,8 @@ interface OpenSearchCodeGuruStackProps extends cdk.StackProps {
   benchmarkEbsSizeGb: number;
   workloadRepo: string;
   workloadBranch: string;
+  testIterations: number;
+  ingestPercentage: number;
   luceneEnabled: boolean;
   luceneRepo: string;
   luceneBranch: string;
@@ -45,7 +48,7 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
     const { branch, opensearchRepo, vpcId, subnetId, subnetAz, securityGroupId, keyPairName,
       s3ProfileBucket, instanceType, ebsSizeGb, ebsIops,
       ebsThroughput, jvmHeap, benchmarkEnabled, benchmarkInstanceType, benchmarkEbsSizeGb,
-      workloadRepo, workloadBranch, luceneEnabled, luceneRepo, luceneBranch,
+      workloadRepo, workloadBranch, testIterations, ingestPercentage, luceneEnabled, luceneRepo, luceneBranch,
       clusterMode, dataNodeCount, metricsStoreHost, metricsStorePort, metricsStoreSecure, runId } = props;
 
     const isMultiNode = clusterMode === "multi";
@@ -314,6 +317,8 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
         .replace(/\{\{METRICS_STORE_HOST\}\}/g, metricsStoreHost)
         .replace(/\{\{METRICS_STORE_PORT\}\}/g, metricsStorePort)
         .replace(/\{\{METRICS_STORE_SECURE\}\}/g, metricsStoreSecure)
+        .replace(/\{\{TEST_ITERATIONS\}\}/g, String(testIterations))
+        .replace(/\{\{INGEST_PERCENTAGE\}\}/g, String(ingestPercentage))
         .replace(/\{\{RUN_ID\}\}/g, runId);
 
       const benchmarkInstance = createInstance("BenchmarkInstance", "BenchmarkLt", benchmarkScript, benchmarkInstanceType, benchmarkEbsSizeGb);
@@ -331,6 +336,40 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
       new cdk.CfnOutput(this, "E1_MetricsStoreEndpoint", { value: `https://${metricsStoreHost}` });
       new cdk.CfnOutput(this, "E2_MetricsStoreDashboard", { value: `https://${metricsStoreHost}/_dashboards (access via SSH tunnel: ssh -i ~/${keyPairName}.pem -L 5601:${metricsStoreHost}:443 ec2-user@<benchmark-dns> then open https://localhost:5601/_dashboards)` });
     }
+
+    // =========================================================================
+    // CloudWatch Dashboard — side-by-side DataFusion vs Lucene system metrics
+    // =========================================================================
+    const metricsNamespace = `OpenSearch/${runId}`;
+
+    const cwMetric = (metricName: string, engineRole: string, stat: string = "Average"): cw.Metric =>
+      new cw.Metric({ namespace: metricsNamespace, metricName, dimensionsMap: { EngineRole: engineRole }, period: cdk.Duration.seconds(60), statistic: stat });
+
+    const sideBySide = (title: string, metricName: string, yLabel: string): cw.GraphWidget =>
+      new cw.GraphWidget({
+        title, width: 24, height: 6,
+        left: [cwMetric(metricName, "datafusion").with({ label: "DataFusion", color: "#FF6B35" })],
+        right: [cwMetric(metricName, "lucene").with({ label: "Lucene", color: "#004E89" })],
+        leftYAxis: { label: yLabel }, rightYAxis: { label: yLabel },
+      });
+
+    const dashboard = new cw.Dashboard(this, "BenchmarkDashboard", {
+      dashboardName: `OpenSearch-${runId}`,
+    });
+
+    dashboard.addWidgets(
+      new cw.TextWidget({ markdown: `# DataFusion vs Lucene — ${runId}\nNamespace: \`${metricsNamespace}\` | EngineRole: \`datafusion\` / \`lucene\``, width: 24, height: 2 }),
+    );
+    dashboard.addWidgets(sideBySide("CPU Usage (%)", "cpu_usage_user", "%"));
+    dashboard.addWidgets(sideBySide("Memory Used (%)", "mem_used_percent", "%"));
+    dashboard.addWidgets(sideBySide("Disk I/O — Write Bytes", "write_bytes", "bytes/s"));
+    dashboard.addWidgets(sideBySide("Disk I/O — Read Bytes", "read_bytes", "bytes/s"));
+    dashboard.addWidgets(sideBySide("Network — Bytes Sent", "bytes_sent", "bytes/s"));
+    dashboard.addWidgets(sideBySide("Network — Bytes Received", "bytes_recv", "bytes/s"));
+
+    new cdk.CfnOutput(this, "G1_CloudWatchDashboard", {
+      value: `https://${this.region}.console.aws.amazon.com/cloudwatch/home?region=${this.region}#dashboards/dashboard/OpenSearch-${runId}`,
+    });
 
     // =========================================================================
     // Run ID

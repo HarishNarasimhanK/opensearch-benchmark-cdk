@@ -19,7 +19,7 @@ ENGINE="${2:?Usage: $0 <host> <engine-name>}"
 RUN_ID="${RUN_ID:-run-$(date +%Y%m%d_%H%M%S)}"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 RESULTS_DIR="$HOME/correctness-results/${ENGINE}"
-OUTPUT_FILE="${RESULTS_DIR}/correctness-${TIMESTAMP}.json"
+OUTPUT_FILE="${RESULTS_DIR}/${ENGINE}-correctness-${TIMESTAMP}.json"
 mkdir -p "$RESULTS_DIR"
 
 echo "============================================"
@@ -187,7 +187,7 @@ echo "============================================"
 # --- Upload to S3 ---
 if [ -n "${S3_BUCKET:-}" ]; then
   S3_PREFIX="s3://${S3_BUCKET}/runs/${RUN_ID}/correctness-results/${ENGINE}"
-  if aws s3 cp "$OUTPUT_FILE" "${S3_PREFIX}/correctness-${TIMESTAMP}.json"; then
+  if aws s3 cp "$OUTPUT_FILE" "${S3_PREFIX}/${ENGINE}-correctness-${TIMESTAMP}.json"; then
     echo "Uploaded to: ${S3_PREFIX}/"
   else
     echo "Failed to upload to S3."

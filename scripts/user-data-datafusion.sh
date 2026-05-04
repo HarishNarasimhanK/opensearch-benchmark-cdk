@@ -41,7 +41,7 @@ echo 'vm.max_map_count=262144' >> /etc/sysctl.conf
 cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json << 'CWCONFIG'
 {
   "metrics": {
-    "namespace": "OpenSearch/DataFusion/{{RUN_ID}}",
+    "namespace": "OpenSearch/{{RUN_ID}}",
     "metrics_collected": {
       "cpu": { "measurement": ["cpu_usage_idle", "cpu_usage_user", "cpu_usage_system"], "metrics_collection_interval": 10 },
       "mem": { "measurement": ["mem_used_percent", "mem_available_percent"], "metrics_collection_interval": 10 },

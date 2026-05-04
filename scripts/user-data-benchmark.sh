@@ -57,7 +57,7 @@ opensearch.src.subdir = OpenSearch
 [benchmarks]
 local.dataset.cache = /home/ec2-user/.osb/benchmarks/data
 
-[results_publishing]
+[reporting]
 datastore.type = opensearch
 datastore.host = '"${METRICS_HOST}"'
 datastore.port = {{METRICS_STORE_PORT}}
@@ -90,6 +90,8 @@ RUN_ID={{RUN_ID}}
 METRICS_STORE_HOST={{METRICS_STORE_HOST}}
 METRICS_STORE_PORT={{METRICS_STORE_PORT}}
 METRICS_STORE_SECURE={{METRICS_STORE_SECURE}}
+TEST_ITERATIONS={{TEST_ITERATIONS}}
+INGEST_PERCENTAGE={{INGEST_PERCENTAGE}}
 WORKLOAD_PATH_DATAFUSION=/home/ec2-user/datafusion-workloads/clickbench
 WORKLOAD_PATH_LUCENE=/home/ec2-user/lucene-workloads/clickbench
 ENVEOF
@@ -99,6 +101,63 @@ chown ec2-user:ec2-user /home/ec2-user/.opensearch-env
 su -l ec2-user -c 'aws s3 cp {{SCRIPTS_S3_PATH}} /tmp/automation-scripts.zip && mkdir -p /home/ec2-user/opensearch-test-automation && cd /home/ec2-user/opensearch-test-automation && unzip -o /tmp/automation-scripts.zip && chmod +x /home/ec2-user/opensearch-test-automation/**/*.sh && rm /tmp/automation-scripts.zip'
 su -l ec2-user -c 'git clone -b {{WORKLOAD_BRANCH}} {{WORKLOAD_REPO}} /home/ec2-user/datafusion-workloads'
 su -l ec2-user -c 'git clone https://github.com/opensearch-project/opensearch-benchmark-workloads.git /home/ec2-user/lucene-workloads'
+
+# --- Step 4b: Pre-download corpus (DISABLED — see FUTURE-ADDITIONS.md item 4) ---
+# Uncomment to warm the OSB cache with a local throwaway OpenSearch.
+# Currently disabled because gradlew run is slow on m7g.medium.
+# Better approach: download the pre-built Lucene tar.gz from S3 instead.
+#
+# echo "=== Pre-downloading corpus data ==="
+# yum install -y java-21-amazon-corretto-devel tar gzip
+#
+# su -l ec2-user -c '
+# set -exo pipefail
+# export JAVA_HOME=/usr/lib/jvm/java-21-amazon-corretto
+# export PATH=$JAVA_HOME/bin:$HOME/.local/bin:$PATH
+#
+# echo "Cloning OpenSearch for local throwaway instance..."
+# git clone --depth 1 https://github.com/opensearch-project/OpenSearch.git $HOME/opensearch-cache-warm
+#
+# echo "Starting local OpenSearch via gradlew run..."
+# cd $HOME/opensearch-cache-warm
+# nohup ./gradlew run -x javadoc -x test -x missingJavadoc > $HOME/cache-warm-opensearch.log 2>&1 &
+# GRADLE_PID=$!
+#
+# echo "Waiting for local OpenSearch to start on localhost:9200..."
+# for i in $(seq 1 120); do
+#   if curl -s "http://localhost:9200" > /dev/null 2>&1; then
+#     echo "Local OpenSearch is up!"
+#     break
+#   fi
+#   if [ $i -eq 120 ]; then echo "Timed out waiting for local OpenSearch"; kill $GRADLE_PID 2>/dev/null || true; exit 0; fi
+#   sleep 5
+# done
+#
+# echo "Running dummy OSB to trigger corpus download..."
+# opensearch-benchmark run \
+#   --pipeline="benchmark-only" \
+#   --workload-path="$HOME/lucene-workloads/clickbench" \
+#   --target-hosts="localhost:9200" \
+#   --test-procedure="dsl-clickbench-test" \
+#   --kill-running-processes \
+#   --workload-params='"'"'{"ingest_percentage": 0, "number_of_shards": 1, "number_of_replicas": 0, "bulk_indexing_clients": 1, "test_iterations": 1, "warmup_iterations": 0}'"'"' \
+#   --test-run-id="cache-warm" \
+#   || true
+#
+# echo "Corpus cached at: ~/.osb/benchmarks/data/"
+# echo "Killing local OpenSearch..."
+# kill $GRADLE_PID 2>/dev/null || true
+# sleep 2
+# pkill -f "opensearch-cache-warm" 2>/dev/null || true
+# pkill -f "GradleDaemon" 2>/dev/null || true
+# sleep 3
+# kill -9 $GRADLE_PID 2>/dev/null || true
+# pkill -9 -f "opensearch-cache-warm" 2>/dev/null || true
+#
+# echo "Cleaning up throwaway OpenSearch source..."
+# rm -rf $HOME/opensearch-cache-warm $HOME/cache-warm-opensearch.log
+# echo "Corpus pre-download complete!"
+# '
 
 # --- Step 5: Auto-run all benchmarks ---
 su -l ec2-user -c 'nohup bash /home/ec2-user/opensearch-test-automation/run-all.sh > /home/ec2-user/benchmark-run.log 2>&1 &'
