@@ -35,47 +35,12 @@ CWCONFIG
 su -l ec2-user -c 'pip3 install opensearch-benchmark --user'
 su -l ec2-user -c 'echo "export PATH=\$HOME/.local/bin:\$PATH" >> ~/.bashrc'
 
-# --- Step 2b: Configure OSB metrics store (for telemetry persistence) ---
+# --- Step 2b: OSB metrics store config ---
+# benchmark.ini is written by run-benchmark.sh right before each OSB run.
+# This avoids OSB overwriting it during pip install or first invocation.
 METRICS_HOST="{{METRICS_STORE_HOST}}"
 if [ -n "$METRICS_HOST" ]; then
-  echo "Configuring OSB metrics store: $METRICS_HOST"
-  su -l ec2-user -c 'mkdir -p ~/.osb && cat > ~/.osb/benchmark.ini << OSBEOF
-[meta]
-config.version = 17
-
-[system]
-env.name = local
-
-[node]
-root.dir = /home/ec2-user/.osb/benchmarks
-src.root.dir = /home/ec2-user/.osb/benchmarks/src
-
-[source]
-remote.repo.url = https://github.com/opensearch-project/OpenSearch.git
-opensearch.src.subdir = OpenSearch
-
-[benchmarks]
-local.dataset.cache = /home/ec2-user/.osb/benchmarks/data
-
-[reporting]
-datastore.type = opensearch
-datastore.host = '"${METRICS_HOST}"'
-datastore.port = {{METRICS_STORE_PORT}}
-datastore.secure = {{METRICS_STORE_SECURE}}
-datastore.user =
-datastore.password =
-
-[workload]
-
-[driver]
-
-[client]
-options =
-
-[telemetry]
-devices =
-OSBEOF'
-  echo "OSB metrics store configured."
+  echo "OSB metrics store will be configured at benchmark time: $METRICS_HOST"
 else
   echo "No metrics store configured — using in-memory (telemetry data will not persist)."
 fi

@@ -28,50 +28,9 @@ source "$HOME/.opensearch-env"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$SCRIPT_DIR"
 
-# --- Ensure OSB metrics store config exists ---
-# benchmark.ini may not exist if user-data failed or OSB hasn't been run yet.
-# Write it here to guarantee it's configured before any benchmark runs.
-if [ -n "${METRICS_STORE_HOST:-}" ] && ! grep -q "datastore.type = opensearch" ~/.osb/benchmark.ini 2>/dev/null; then
-  echo "Configuring OSB metrics store: ${METRICS_STORE_HOST}"
-  mkdir -p ~/.osb
-  cat > ~/.osb/benchmark.ini << OSBEOF
-[meta]
-config.version = 17
-
-[system]
-env.name = local
-
-[node]
-root.dir = /home/ec2-user/.osb/benchmarks
-src.root.dir = /home/ec2-user/.osb/benchmarks/src
-
-[source]
-remote.repo.url = https://github.com/opensearch-project/OpenSearch.git
-opensearch.src.subdir = OpenSearch
-
-[benchmarks]
-local.dataset.cache = /home/ec2-user/.osb/benchmarks/data
-
-[reporting]
-datastore.type = opensearch
-datastore.host = ${METRICS_STORE_HOST}
-datastore.port = ${METRICS_STORE_PORT:-443}
-datastore.secure = ${METRICS_STORE_SECURE:-True}
-datastore.user =
-datastore.password =
-
-[workload]
-
-[driver]
-
-[client]
-options =
-
-[telemetry]
-devices =
-OSBEOF
-  echo "OSB metrics store configured."
-fi
+# --- Ensure OSB metrics store config ---
+# benchmark.ini is written by run-benchmark.sh right before each OSB run.
+# No need to write it here.
 
 # --- Run ID (set at deploy time, read from .opensearch-env) ---
 export RUN_ID
@@ -95,20 +54,7 @@ aws s3 rm "s3://${S3_BUCKET}/flags/BENCHMARK_COMPLETE" 2>/dev/null || true
 
 # --- Run benchmarks + correctness sequentially ---
 # OSB does not allow two instances on the same machine.
-# DataFusion runs first, then Lucene.
-
-echo ""
-echo ">>> Running DataFusion benchmark (PPL queries)..."
-bash "$REPO_DIR/benchmark/run-benchmark.sh" \
-  --host "$DATAFUSION_HOST" \
-  --engine datafusion \
-  --workload "$WORKLOAD_PATH_DATAFUSION" \
-  2>&1 | tee "$HOME/benchmark-datafusion.log"
-
-echo ""
-echo ">>> Running DataFusion correctness test..."
-bash "$REPO_DIR/correctness/run-datafusion-correctness-test.sh" "$DATAFUSION_HOST" "datafusion" \
-  2>&1 | tee "$HOME/correctness-datafusion.log"
+# Lucene runs first, then DataFusion.
 
 if [ -n "${LUCENE_HOST:-}" ]; then
   echo ""
@@ -126,6 +72,19 @@ if [ -n "${LUCENE_HOST:-}" ]; then
 else
   echo "Lucene instance not enabled, skipping."
 fi
+
+echo ""
+echo ">>> Running DataFusion benchmark (PPL queries)..."
+bash "$REPO_DIR/benchmark/run-benchmark.sh" \
+  --host "$DATAFUSION_HOST" \
+  --engine datafusion \
+  --workload "$WORKLOAD_PATH_DATAFUSION" \
+  2>&1 | tee "$HOME/benchmark-datafusion.log"
+
+echo ""
+echo ">>> Running DataFusion correctness test..."
+bash "$REPO_DIR/correctness/run-datafusion-correctness-test.sh" "$DATAFUSION_HOST" "datafusion" \
+  2>&1 | tee "$HOME/correctness-datafusion.log"
 
 echo ""
 echo "============================================"

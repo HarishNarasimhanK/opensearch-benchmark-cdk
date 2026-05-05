@@ -3,3 +3,4 @@ cdk.out
 .env
 .kiro
 cdk-outputs.json
+__pycache__/

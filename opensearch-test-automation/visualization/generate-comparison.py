@@ -163,6 +163,18 @@ def generate_html(df_data, lu_data, run_id, output_path):
             scatter_df.append(round(df_val, 2))
             scatter_labels.append(q)
 
+    # --- Chart 5: Mean Throughput (achieved ops/s) for queries passing on both ---
+    tp_labels = []
+    df_tp = []
+    lu_tp = []
+    for q in passing_both:
+        df_val = get_metric(df_data, 'Mean Throughput', df_norm[q])
+        lu_val = get_metric(lu_data, 'Mean Throughput', lu_norm[q])
+        if df_val is not None or lu_val is not None:
+            tp_labels.append(q)
+            df_tp.append(round(df_val, 2) if df_val is not None else 0)
+            lu_tp.append(round(lu_val, 2) if lu_val is not None else 0)
+
     # --- Summary stats ---
     df_passing = len(passing_both) + len(passing_df_only)
     lu_passing = len(passing_both) + len(passing_lu_only)
@@ -237,13 +249,14 @@ def generate_html(df_data, lu_data, run_id, output_path):
   Chart 2 is a pass/fail heatmap — green = 0% errors, red = 100% errors. Scan vertically to see which queries each engine handles.
   Chart 3 shows p50/p90/p99 service time per engine for queries passing on both. Darker = lower percentile.
   Chart 4 is a scatter plot: each dot is a query, X = Lucene latency, Y = DataFusion latency. Dots above the diagonal line mean DataFusion is slower.
-  Throughput chart is omitted because OSB throttles all queries to the same target-throughput, making the comparison meaningless.
+  Chart 5 shows mean throughput (achieved ops/s) per query — higher is better.
 </div>
 
 <div class="chart" id="chart1"></div>
 <div class="chart" id="chart2"></div>
 <div class="chart" id="chart3"></div>
 <div class="chart" id="chart4"></div>
+<div class="chart" id="chart5"></div>
 
 <script>
 // Chart 1: P50 Service Time (only passing queries get bars)
@@ -316,6 +329,20 @@ Plotly.newPlot('chart4', [
     line: {{color: '#333', width: 1, dash: 'dash'}}}}],
   height: 550, margin: {{l: 80, r: 30, t: 80, b: 80}},
   showlegend: false
+}});
+
+// Chart 5: 100th Percentile Throughput (achieved ops/s)
+Plotly.newPlot('chart5', [
+  {{name: 'DataFusion', x: {js_array(tp_labels)}, y: {js_array(df_tp)}, type: 'bar',
+    marker: {{color: '#FF6B35'}},
+    hovertemplate: '%{{x}}<br>DataFusion: %{{y:.2f}} ops/s<extra></extra>'}},
+  {{name: 'Lucene', x: {js_array(tp_labels)}, y: {js_array(lu_tp)}, type: 'bar',
+    marker: {{color: '#004E89'}},
+    hovertemplate: '%{{x}}<br>Lucene: %{{y:.2f}} ops/s<extra></extra>'}}
+], {{
+  title: 'Mean Throughput — Queries Passing on Both (ops/s) — Higher is Better<br><sub>Actual achieved query execution rate. Lower throughput = query took longer.</sub>',
+  barmode: 'group', xaxis: {{tickangle: -45}}, yaxis: {{title: 'ops/s'}},
+  height: 500, margin: {{b: 150}}
 }});
 </script>
 </body>

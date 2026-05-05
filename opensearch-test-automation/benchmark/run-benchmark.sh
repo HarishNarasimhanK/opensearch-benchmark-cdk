@@ -92,6 +92,49 @@ elif [ "$ENGINE" = "lucene" ]; then
   TEST_PROCEDURE="dsl-clickbench"
 fi
 
+# --- Ensure OSB metrics store config is correct right before running ---
+# OSB sometimes overwrites benchmark.ini on first run. Force it here.
+if [ -n "${METRICS_STORE_HOST:-}" ]; then
+  echo "Writing OSB metrics store config (${METRICS_STORE_HOST})..."
+  mkdir -p ~/.osb
+  cat > ~/.osb/benchmark.ini << OSBEOF
+[meta]
+config.version = 17
+
+[system]
+env.name = local
+
+[node]
+root.dir = /home/ec2-user/.osb/benchmarks
+src.root.dir = /home/ec2-user/.osb/benchmarks/src
+
+[source]
+remote.repo.url = https://github.com/opensearch-project/OpenSearch.git
+opensearch.src.subdir = OpenSearch
+
+[benchmarks]
+local.dataset.cache = /home/ec2-user/.osb/benchmarks/data
+
+[reporting]
+datastore.type = opensearch
+datastore.host = ${METRICS_STORE_HOST}
+datastore.port = ${METRICS_STORE_PORT:-443}
+datastore.secure = ${METRICS_STORE_SECURE:-True}
+datastore.user =
+datastore.password =
+
+[workload]
+
+[driver]
+
+[client]
+options =
+
+[telemetry]
+devices =
+OSBEOF
+fi
+
 # --- Run benchmark ---
 TELEMETRY_PARAMS='{"node-stats-sample-interval": 5, "node-stats-include-indices": true, "node-stats-include-indices-metrics": "docs,store,indexing,search,merges,segments,query_cache,fielddata,translog"}'
 
@@ -114,7 +157,7 @@ opensearch-benchmark run \
   --show-in-results=all-percentiles \
   --telemetry=node-stats \
   --telemetry-params="${TELEMETRY_PARAMS}" \
-  --workload-params="{\"ingest_percentage\": ${INGEST_PERCENTAGE:-0.001}, \"number_of_shards\": ${NUM_SHARDS}, \"number_of_replicas\": 0, \"bulk_indexing_clients\": 1, \"test_iterations\": ${TEST_ITERATIONS:-20}, \"warmup_iterations\": 3}" \
+  --workload-params="{\"ingest_percentage\": ${INGEST_PERCENTAGE:-0.001}, \"number_of_shards\": ${NUM_SHARDS}, \"number_of_replicas\": 0, \"bulk_indexing_clients\": 1, \"test_iterations\": ${TEST_ITERATIONS:-20}, \"warmup_iterations\": 3, \"target_throughput\": 1000}" \
   && OSB_EXIT=0 || OSB_EXIT=$?
 BENCH_END=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 BENCH_END_EPOCH=$(date +%s)

@@ -133,6 +133,7 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
         .replace(/\{\{CLUSTER_TAG\}\}/g, clusterTag)
         .replace(/\{\{NODE_NAME\}\}/g, nodeName)
         .replace(/\{\{NODE_ROLES\}\}/g, nodeRoles)
+        .replace(/\{\{BENCHMARK_ENABLED\}\}/g, String(benchmarkEnabled))
         .replace(/\{\{RUN_ID\}\}/g, runId);
 
       const inst = createInstance(nodeId, ltId, script, instanceType, ebsSizeGb, ebsIops, ebsThroughput);
@@ -167,6 +168,7 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
     // DataFusion OpenSearch: single-node or multi-node cluster
     // =========================================================================
     let datafusionEndpoint: string;
+    let datafusionInstanceId: string = "";
 
     if (isMultiNode) {
       // --- Multi-node: 3 managers + N data nodes + internal ALB ---
@@ -213,6 +215,7 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
       // --- Single-node (default) ---
       const instance = createDataFusionInstance("DataFusionInstance", "DataFusionLt", "node", "");
       datafusionEndpoint = instance.instancePrivateIp;
+      datafusionInstanceId = instance.instanceId;
 
       new cdk.CfnOutput(this, "B1_DataFusionSSH", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${instance.instancePublicDnsName}` });
       new cdk.CfnOutput(this, "B2_DataFusionSetupLog", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${instance.instancePublicDnsName} "tail -f /var/log/user-data.log"` });
@@ -224,6 +227,7 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
     // Lucene OpenSearch: single-node or multi-node cluster
     // =========================================================================
     let luceneEndpoint = "";
+    let luceneInstanceId: string = "";
     if (luceneEnabled) {
       const luceneClusterTag = `${id}-lucene-cluster`;
 
@@ -295,6 +299,7 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
         // --- Single-node (default) ---
         const luceneInstance = createLuceneInstance("LuceneInstance", "LuceneLt", "node", "");
         luceneEndpoint = luceneInstance.instancePrivateIp;
+        luceneInstanceId = luceneInstance.instanceId;
 
         new cdk.CfnOutput(this, "C1_LuceneSSH", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${luceneInstance.instancePublicDnsName}` });
         new cdk.CfnOutput(this, "C2_LuceneSetupLog", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${luceneInstance.instancePublicDnsName} "tail -f /var/log/user-data.log"` });
@@ -332,7 +337,7 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
     // =========================================================================
     // Metrics Store
     // =========================================================================
-    if (metricsStoreHost) {
+    if (metricsStoreHost && benchmarkEnabled) {
       new cdk.CfnOutput(this, "E1_MetricsStoreEndpoint", { value: `https://${metricsStoreHost}` });
       new cdk.CfnOutput(this, "E2_MetricsStoreDashboard", { value: `https://${metricsStoreHost}/_dashboards (access via SSH tunnel: ssh -i ~/${keyPairName}.pem -L 5601:${metricsStoreHost}:443 ec2-user@<benchmark-dns> then open https://localhost:5601/_dashboards)` });
     }
@@ -342,30 +347,66 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
     // =========================================================================
     const metricsNamespace = `OpenSearch/${runId}`;
 
-    const cwMetric = (metricName: string, engineRole: string, stat: string = "Average"): cw.Metric =>
-      new cw.Metric({ namespace: metricsNamespace, metricName, dimensionsMap: { EngineRole: engineRole }, period: cdk.Duration.seconds(60), statistic: stat });
+    // Use instance IDs to identify engines (EngineRole custom dimension is not supported by CW agent)
+    const dfInstanceId = datafusionInstanceId;
+    const luInstanceId = luceneInstanceId;
 
-    const sideBySide = (title: string, metricName: string, yLabel: string): cw.GraphWidget =>
-      new cw.GraphWidget({
-        title, width: 24, height: 6,
-        left: [cwMetric(metricName, "datafusion").with({ label: "DataFusion", color: "#FF6B35" })],
-        right: [cwMetric(metricName, "lucene").with({ label: "Lucene", color: "#004E89" })],
+    const cwMetric = (metricName: string, instanceId: string, extraDims?: Record<string, string>): cw.Metric =>
+      new cw.Metric({
+        namespace: metricsNamespace, metricName,
+        dimensionsMap: { InstanceId: instanceId, ...extraDims },
+        period: cdk.Duration.seconds(60), statistic: "Average",
+      });
+
+    const sideBySide = (title: string, metricName: string, yLabel: string, extraDims?: Record<string, string>): cw.GraphWidget => {
+      const left = [cwMetric(metricName, dfInstanceId, extraDims).with({ label: "DataFusion", color: "#FF6B35" })];
+      const right = luInstanceId ? [cwMetric(metricName, luInstanceId, extraDims).with({ label: "Lucene", color: "#004E89" })] : [];
+      return new cw.GraphWidget({
+        title, width: 24, height: 6, left, right,
         leftYAxis: { label: yLabel }, rightYAxis: { label: yLabel },
       });
+    };
 
     const dashboard = new cw.Dashboard(this, "BenchmarkDashboard", {
       dashboardName: `OpenSearch-${runId}`,
     });
 
     dashboard.addWidgets(
-      new cw.TextWidget({ markdown: `# DataFusion vs Lucene — ${runId}\nNamespace: \`${metricsNamespace}\` | EngineRole: \`datafusion\` / \`lucene\``, width: 24, height: 2 }),
+      new cw.TextWidget({
+        markdown: `# DataFusion vs Lucene — ${runId}\nNamespace: \`${metricsNamespace}\`\n\nNote: Graphs use InstanceId to distinguish engines. If graphs are empty, the instances may still be starting up. Check back in 30-40 minutes after deploy.`,
+        width: 24, height: 2,
+      }),
     );
-    dashboard.addWidgets(sideBySide("CPU Usage (%)", "cpu_usage_user", "%"));
+    dashboard.addWidgets(sideBySide("CPU Usage (%)", "cpu_usage_user", "%", { cpu: "cpu-total" }));
     dashboard.addWidgets(sideBySide("Memory Used (%)", "mem_used_percent", "%"));
-    dashboard.addWidgets(sideBySide("Disk I/O — Write Bytes", "write_bytes", "bytes/s"));
-    dashboard.addWidgets(sideBySide("Disk I/O — Read Bytes", "read_bytes", "bytes/s"));
-    dashboard.addWidgets(sideBySide("Network — Bytes Sent", "bytes_sent", "bytes/s"));
-    dashboard.addWidgets(sideBySide("Network — Bytes Received", "bytes_recv", "bytes/s"));
+    dashboard.addWidgets(sideBySide("Disk I/O — Write Bytes", "diskio_write_bytes", "bytes", { name: "nvme0n1p1" }));
+    dashboard.addWidgets(sideBySide("Disk I/O — Read Bytes", "diskio_read_bytes", "bytes", { name: "nvme0n1p1" }));
+    dashboard.addWidgets(sideBySide("Network — Bytes Sent", "net_bytes_sent", "bytes", { interface: "ens5" }));
+    dashboard.addWidgets(sideBySide("Network — Bytes Received", "net_bytes_recv", "bytes", { interface: "ens5" }));
+
+    // vmstat memory stats from logs — separate widgets per metric for proper scaling
+    const vmstatWidget = (title: string, logGroup: string, field: string): cw.LogQueryWidget =>
+      new cw.LogQueryWidget({
+        title, logGroupNames: [logGroup],
+        queryLines: [
+          `fields @timestamp, @message`,
+          `parse @message "* free:* buff:* cache:*" as ts, free, buff, cache`,
+          `stats avg(${field}) as ${field}_kb by bin(1m)`,
+        ],
+        view: cw.LogQueryVisualizationType.LINE,
+        width: 8, height: 6,
+      });
+
+    dashboard.addWidgets(
+      vmstatWidget("DataFusion — Free Memory (KB)", "/opensearch/datafusion/vmstat", "free"),
+      vmstatWidget("DataFusion — Buffer (KB)", "/opensearch/datafusion/vmstat", "buff"),
+      vmstatWidget("DataFusion — Cache (KB)", "/opensearch/datafusion/vmstat", "cache"),
+    );
+    dashboard.addWidgets(
+      vmstatWidget("Lucene — Free Memory (KB)", "/opensearch/lucene/vmstat", "free"),
+      vmstatWidget("Lucene — Buffer (KB)", "/opensearch/lucene/vmstat", "buff"),
+      vmstatWidget("Lucene — Cache (KB)", "/opensearch/lucene/vmstat", "cache"),
+    );
 
     new cdk.CfnOutput(this, "G1_CloudWatchDashboard", {
       value: `https://${this.region}.console.aws.amazon.com/cloudwatch/home?region=${this.region}#dashboards/dashboard/OpenSearch-${runId}`,

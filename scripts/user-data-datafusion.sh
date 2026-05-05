@@ -49,7 +49,7 @@ cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json << 'CWCO
       "diskio": { "measurement": ["reads", "writes", "read_bytes", "write_bytes"], "metrics_collection_interval": 10 },
       "net": { "measurement": ["bytes_sent", "bytes_recv"], "metrics_collection_interval": 10 }
     },
-    "append_dimensions": { "InstanceId": "${aws:InstanceId}", "EngineRole": "datafusion" }
+    "append_dimensions": { "InstanceId": "${aws:InstanceId}" }
   },
   "logs": {
     "logs_collected": {
@@ -58,7 +58,8 @@ cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json << 'CWCO
           { "file_path": "/var/log/user-data.log", "log_group_name": "/opensearch/datafusion/user-data", "log_stream_name": "{{RUN_ID}}/{instance_id}-{{NODE_NAME}}" },
           { "file_path": "/home/ec2-user/datafusion-opensearch-run.log", "log_group_name": "/opensearch/datafusion/runtime", "log_stream_name": "{{RUN_ID}}/{instance_id}-{{NODE_NAME}}" },
           { "file_path": "/home/ec2-user/upload-data.log", "log_group_name": "/opensearch/datafusion/upload-data", "log_stream_name": "{{RUN_ID}}/{instance_id}-{{NODE_NAME}}" },
-          { "file_path": "/home/ec2-user/profile-cron.log", "log_group_name": "/opensearch/datafusion/profiler", "log_stream_name": "{{RUN_ID}}/{instance_id}-{{NODE_NAME}}" }
+          { "file_path": "/home/ec2-user/profile-cron.log", "log_group_name": "/opensearch/datafusion/profiler", "log_stream_name": "{{RUN_ID}}/{instance_id}-{{NODE_NAME}}" },
+          { "file_path": "/home/ec2-user/vmstat.log", "log_group_name": "/opensearch/datafusion/vmstat", "log_stream_name": "{{RUN_ID}}/{instance_id}-{{NODE_NAME}}" }
         ]
       }
     }
@@ -136,7 +137,8 @@ echo '*/5 * * * * /home/ec2-user/opensearch-test-automation/profiler/profile-ope
 
 cat > /etc/logrotate.d/opensearch-profiler << 'LOGROTATE'
 /home/ec2-user/datafusion-opensearch-run.log
-/home/ec2-user/profile-cron.log {
+/home/ec2-user/profile-cron.log
+/home/ec2-user/vmstat.log {
     size 100M
     rotate 5
     compress
@@ -163,5 +165,12 @@ nohup $HOME/datafusion-opensearch/bin/opensearch > $HOME/datafusion-opensearch-r
 '
 echo "OpenSearch started! Waiting for it to be ready..."
 
+# --- Step 10b: Start vmstat logging (memory allocator diagnostics) ---
+yum install -y screen
+su -l ec2-user -c 'screen -dmS vmstat bash -c "vmstat 1 | awk '\''NR>2 && \$4+0==\$4 {print strftime(\"%Y-%m-%dT%H:%M:%SZ\",systime()),\"free:\"\$4,\"buff:\"\$5,\"cache:\"\$6; fflush()}'\'' | tee -a /home/ec2-user/vmstat.log"'
+echo "vmstat logging started in background (screen session: vmstat)"
+
 # --- Step 11: Background poller — uploads data folder to S3 after benchmark completes ---
-su -l ec2-user -c 'nohup bash /home/ec2-user/opensearch-test-automation/data-upload/upload-data-on-complete.sh > /home/ec2-user/upload-data.log 2>&1 &'
+if [ "{{BENCHMARK_ENABLED}}" = "true" ]; then
+  su -l ec2-user -c 'nohup bash /home/ec2-user/opensearch-test-automation/data-upload/upload-data-on-complete.sh > /home/ec2-user/upload-data.log 2>&1 &'
+fi

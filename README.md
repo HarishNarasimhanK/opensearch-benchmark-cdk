@@ -38,6 +38,9 @@ npx cdk deploy
 
 # Multi-node (3 managers + N data nodes per engine, with ALB)
 npx cdk deploy -c clusterMode=multi -c dataNodeCount=3
+
+# OpenSearch instances only (no benchmark — bring your own)
+npx cdk deploy -c benchmarkEnabled=false
 ```
 
 On first run, `setup-env.sh` runs automatically to discover your VPC, create a security group, key pair, and S3 bucket.
@@ -73,7 +76,7 @@ npx cdk destroy --force
 | Builder | `r7g.2xlarge` | Builds both engines, uploads tar.gz to S3, shuts down |
 | DataFusion | `r7g.2xlarge` | Downloads tar.gz, runs OpenSearch with sandbox plugins (PPL via `/_analytics/ppl`) |
 | Lucene | `r7g.2xlarge` | Downloads tar.gz, runs vanilla OpenSearch (DSL via `/_search`) |
-| Benchmark | `m7g.xlarge` | Runs OSB benchmarks, correctness, field integrity, generates comparison dashboard, signals data upload |
+| Benchmark | `m7g.medium` | Runs OSB benchmarks, correctness, field integrity, generates comparison dashboard, signals data upload |
 
 ### Multi-node mode (`npx cdk deploy -c clusterMode=multi -c dataNodeCount=3`)
 
@@ -95,6 +98,7 @@ Per engine: 3 cluster managers + N data nodes + internal ALB. Uses EC2 tag-based
 | `-c workloadBranch=<branch>` | `indexing` | OSB benchmark workloads branch |
 | `-c testIterations=<N>` | `20` | Number of query iterations per benchmark run (higher = better percentile data) |
 | `-c ingestPercentage=<N>` | `0.001` | Fraction of ClickBench dataset to ingest (0.001 = ~1000 docs, 1 = full 100M) |
+| `-c benchmarkEnabled=false` | `true` | Set to `false` to skip benchmark instance — deploys only Builder + DataFusion + Lucene OpenSearch. Users bring their own benchmark setup. CloudWatch metrics, logs, vmstat, and async-profiler still run on the OpenSearch instances. |
 
 ---
 
@@ -138,6 +142,7 @@ All results go to `s3://bucket/runs/<RUN_ID>/`.
 - **Async Profiler** — CPU flame graphs captured every 5 minutes on each OpenSearch instance via async-profiler cron job
 - **Data Upload** — after benchmarks complete, each data node tars and uploads its OpenSearch data directory (Parquet files for DataFusion, Lucene segments for Lucene) to S3 for post-mortem analysis
 - **CloudWatch Metrics + Logs** — system metrics (CPU, memory, disk, network) and all logs streamed to CloudWatch for real-time monitoring and post-termination access
+- **vmstat Logging** — per-second memory stats (free/buff/cache) logged on each OpenSearch instance, streamed to CloudWatch, and visualized in the auto-created dashboard
 - **Run Isolation** — each deploy generates a unique `RUN_ID`; all results are stored under `s3://bucket/runs/<RUN_ID>/` so runs never overwrite each other
 
 ---
@@ -155,3 +160,5 @@ All results go to `s3://bucket/runs/<RUN_ID>/`.
 | `/opensearch/benchmark/run` | Full orchestrator output (run-all.sh) |
 | `/opensearch/benchmark/datafusion` | DataFusion benchmark output |
 | `/opensearch/benchmark/lucene` | Lucene benchmark output |
+| `/opensearch/datafusion/vmstat` | DataFusion vmstat memory stats (free/buff/cache per second) |
+| `/opensearch/lucene/vmstat` | Lucene vmstat memory stats (free/buff/cache per second) |
