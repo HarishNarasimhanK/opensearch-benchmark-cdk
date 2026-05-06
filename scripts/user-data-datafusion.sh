@@ -8,7 +8,7 @@ exec > /var/log/user-data.log 2>&1
 #
 # The tar.gz already contains:
 #   - OpenSearch distribution (localDistro)
-#   - 7 sandbox plugins (analytics-engine, parquet-data-format,
+#   - 8 plugins (arrow-flight-rpc, analytics-engine, parquet-data-format,
 #     analytics-backend-datafusion, analytics-backend-lucene,
 #     dsl-query-executor, composite-engine, test-ppl-frontend)
 #   - libopensearch_native.so in lib/
@@ -40,26 +40,51 @@ echo 'vm.max_map_count=262144' >> /etc/sysctl.conf
 # --- Step 2: Start CloudWatch agent early ---
 cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json << 'CWCONFIG'
 {
+  "agent": {
+    "metrics_collection_interval": 10,
+    "run_as_user": "cwagent"
+  },
   "metrics": {
     "namespace": "OpenSearch/{{RUN_ID}}",
-    "metrics_collected": {
-      "cpu": { "measurement": ["cpu_usage_idle", "cpu_usage_user", "cpu_usage_system"], "metrics_collection_interval": 10 },
-      "mem": { "measurement": ["mem_used_percent", "mem_available_percent"], "metrics_collection_interval": 10 },
-      "disk": { "measurement": ["disk_used_percent"], "resources": ["/"], "metrics_collection_interval": 60 },
-      "diskio": { "measurement": ["reads", "writes", "read_bytes", "write_bytes"], "metrics_collection_interval": 10 },
-      "net": { "measurement": ["bytes_sent", "bytes_recv"], "metrics_collection_interval": 10 }
+    "append_dimensions": {
+      "InstanceId": "${aws:InstanceId}",
+      "InstanceType": "${aws:InstanceType}"
     },
-    "append_dimensions": { "InstanceId": "${aws:InstanceId}" }
+    "aggregation_dimensions": [["InstanceId"]],
+    "metrics_collected": {
+      "cpu": {
+        "measurement": ["cpu_usage_active", "cpu_usage_idle", "cpu_usage_iowait", "cpu_usage_user", "cpu_usage_system", "cpu_usage_steal"]
+      },
+      "mem": {
+        "measurement": ["mem_active", "mem_available", "mem_available_percent", "mem_buffered", "mem_cached", "mem_free", "mem_total", "mem_used", "mem_used_percent"]
+      },
+      "disk": {
+        "measurement": ["disk_free", "disk_used", "disk_used_percent", "disk_total"],
+        "drop_device": true
+      },
+      "diskio": {
+        "measurement": ["diskio_read_bytes", "diskio_write_bytes", "diskio_reads", "diskio_writes", "diskio_io_time", "diskio_iops_in_progress"]
+      },
+      "net": {
+        "measurement": ["net_bytes_recv", "net_bytes_sent", "net_packets_recv", "net_packets_sent", "net_err_in", "net_err_out"]
+      },
+      "swap": {
+        "measurement": ["swap_free", "swap_used", "swap_used_percent"]
+      },
+      "netstat": {
+        "measurement": ["netstat_tcp_established", "netstat_tcp_time_wait", "netstat_tcp_close_wait"]
+      }
+    }
   },
   "logs": {
     "logs_collected": {
       "files": {
         "collect_list": [
-          { "file_path": "/var/log/user-data.log", "log_group_name": "/opensearch/datafusion/user-data", "log_stream_name": "{{RUN_ID}}/{instance_id}-{{NODE_NAME}}" },
-          { "file_path": "/home/ec2-user/datafusion-opensearch-run.log", "log_group_name": "/opensearch/datafusion/runtime", "log_stream_name": "{{RUN_ID}}/{instance_id}-{{NODE_NAME}}" },
-          { "file_path": "/home/ec2-user/upload-data.log", "log_group_name": "/opensearch/datafusion/upload-data", "log_stream_name": "{{RUN_ID}}/{instance_id}-{{NODE_NAME}}" },
-          { "file_path": "/home/ec2-user/profile-cron.log", "log_group_name": "/opensearch/datafusion/profiler", "log_stream_name": "{{RUN_ID}}/{instance_id}-{{NODE_NAME}}" },
-          { "file_path": "/home/ec2-user/vmstat.log", "log_group_name": "/opensearch/datafusion/vmstat", "log_stream_name": "{{RUN_ID}}/{instance_id}-{{NODE_NAME}}" }
+          { "file_path": "/var/log/user-data.log", "log_group_name": "{{LOG_GROUP_PREFIX}}/datafusion/user-data", "log_stream_name": "{{RUN_ID}}/{instance_id}-{{NODE_NAME}}" },
+          { "file_path": "/home/ec2-user/datafusion-opensearch-run.log", "log_group_name": "{{LOG_GROUP_PREFIX}}/datafusion/runtime", "log_stream_name": "{{RUN_ID}}/{instance_id}-{{NODE_NAME}}" },
+          { "file_path": "/home/ec2-user/upload-data.log", "log_group_name": "{{LOG_GROUP_PREFIX}}/datafusion/upload-data", "log_stream_name": "{{RUN_ID}}/{instance_id}-{{NODE_NAME}}" },
+          { "file_path": "/home/ec2-user/profile-cron.log", "log_group_name": "{{LOG_GROUP_PREFIX}}/datafusion/profiler", "log_stream_name": "{{RUN_ID}}/{instance_id}-{{NODE_NAME}}" },
+          { "file_path": "/home/ec2-user/vmstat.log", "log_group_name": "{{LOG_GROUP_PREFIX}}/datafusion/vmstat", "log_stream_name": "{{RUN_ID}}/{instance_id}-{{NODE_NAME}}" }
         ]
       }
     }
@@ -127,13 +152,13 @@ su -l ec2-user -c 'aws s3 cp {{SCRIPTS_S3_PATH}} /tmp/automation-scripts.zip && 
 
 # --- Step 8: Install async-profiler ---
 su -l ec2-user -c 'mkdir -p /home/ec2-user/async-profiler'
-su -l ec2-user -c 'curl -L -o /home/ec2-user/async-profiler/async-profiler.tar.gz https://github.com/async-profiler/async-profiler/releases/download/v3.0/async-profiler-3.0-linux-arm64.tar.gz'
+su -l ec2-user -c 'curl -L -o /home/ec2-user/async-profiler/async-profiler.tar.gz https://github.com/async-profiler/async-profiler/releases/download/v4.4/async-profiler-4.4-linux-arm64.tar.gz'
 su -l ec2-user -c 'tar xzf /home/ec2-user/async-profiler/async-profiler.tar.gz -C /home/ec2-user/async-profiler --strip-components=1'
 
 # --- Step 9: Setup cron and logrotate ---
 systemctl enable crond
 systemctl start crond
-echo '*/5 * * * * /home/ec2-user/opensearch-test-automation/profiler/profile-opensearch.sh >> /home/ec2-user/profile-cron.log 2>&1' | crontab -u ec2-user -
+echo '*/3 * * * * /home/ec2-user/opensearch-test-automation/profiler/profile-opensearch.sh >> /home/ec2-user/profile-cron.log 2>&1' | crontab -u ec2-user -
 
 cat > /etc/logrotate.d/opensearch-profiler << 'LOGROTATE'
 /home/ec2-user/datafusion-opensearch-run.log
@@ -151,16 +176,16 @@ cat > /etc/logrotate.d/opensearch-profiler << 'LOGROTATE'
 LOGROTATE
 
 # --- Step 10: Start OpenSearch with sandbox feature flags ---
-# Two JVM flags required for DataFusion sandbox:
+# JVM flags required for DataFusion sandbox:
 #   -Djava.library.path=...  → tells JVM where to find libopensearch_native.so
 #   -Dopensearch.experimental.feature.pluggable.dataformat.enabled=true
 #     → enables the pluggable dataformat infrastructure at the server level
-#     → without this, queries against parquet indexes fail with
-#       "acquireReader is not supported in EngineBackedIndexer"
+#   -Dio.netty.* flags → Arrow/Flight memory allocator needs Netty unsafe access on JDK 25
+#   --add-opens / --enable-native-access → required for Arrow direct memory on JDK 25
 su -l ec2-user -c '
 export JAVA_HOME=$HOME/amazon-corretto-25.0.3.9.1-linux-aarch64
 export PATH=$JAVA_HOME/bin:$PATH
-export OPENSEARCH_JAVA_OPTS="-Djava.library.path=$HOME/datafusion-opensearch/lib -Dopensearch.experimental.feature.pluggable.dataformat.enabled=true"
+export OPENSEARCH_JAVA_OPTS="-Djava.library.path=$HOME/datafusion-opensearch/lib -Dopensearch.experimental.feature.pluggable.dataformat.enabled=true -Dopensearch.experimental.feature.transport.stream.enabled=true -Dopensearch.pluggable.dataformat.merge.enabled=true -Dio.netty.allocator.numDirectArenas=1 -Dio.netty.noUnsafe=false -Dio.netty.tryUnsafe=true -Dio.netty.tryReflectionSetAccessible=true --add-opens=java.base/java.nio=ALL-UNNAMED --enable-native-access=ALL-UNNAMED -XX:+EnableDynamicAgentLoading"
 nohup $HOME/datafusion-opensearch/bin/opensearch > $HOME/datafusion-opensearch-run.log 2>&1 &
 '
 echo "OpenSearch started! Waiting for it to be ready..."
@@ -171,6 +196,4 @@ su -l ec2-user -c 'screen -dmS vmstat bash -c "vmstat 1 | awk '\''NR>2 && \$4+0=
 echo "vmstat logging started in background (screen session: vmstat)"
 
 # --- Step 11: Background poller — uploads data folder to S3 after benchmark completes ---
-if [ "{{BENCHMARK_ENABLED}}" = "true" ]; then
-  su -l ec2-user -c 'nohup bash /home/ec2-user/opensearch-test-automation/data-upload/upload-data-on-complete.sh > /home/ec2-user/upload-data.log 2>&1 &'
-fi
+su -l ec2-user -c 'nohup bash /home/ec2-user/opensearch-test-automation/data-upload/upload-data-on-complete.sh > /home/ec2-user/upload-data.log 2>&1 &'

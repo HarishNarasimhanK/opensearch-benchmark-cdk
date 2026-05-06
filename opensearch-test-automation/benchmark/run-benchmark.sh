@@ -43,10 +43,13 @@ RUN_ID="${RUN_ID:-run-$(date +%Y%m%d_%H%M%S)}"
 BENCHMARK_ID="${RUN_ID}-${ENGINE}"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 # DataFusion sandbox only supports single shard; Lucene uses 1 shard per data node
+# DataFusion/Parquet needs ~50 bulk clients for CPU saturation; Lucene needs ~8
 if [ "$ENGINE" = "datafusion" ]; then
   NUM_SHARDS=1
+  BULK_CLIENTS=50
 else
   NUM_SHARDS="${DATA_NODE_COUNT:-1}"
+  BULK_CLIENTS=8
 fi
 RESULTS_DIR="$HOME/benchmark-results/${ENGINE}"
 mkdir -p "$RESULTS_DIR"
@@ -157,7 +160,7 @@ opensearch-benchmark run \
   --show-in-results=all-percentiles \
   --telemetry=node-stats \
   --telemetry-params="${TELEMETRY_PARAMS}" \
-  --workload-params="{\"ingest_percentage\": ${INGEST_PERCENTAGE:-0.001}, \"number_of_shards\": ${NUM_SHARDS}, \"number_of_replicas\": 0, \"bulk_indexing_clients\": 1, \"test_iterations\": ${TEST_ITERATIONS:-20}, \"warmup_iterations\": 3, \"target_throughput\": 1000}" \
+  --workload-params="{\"ingest_percentage\": ${INGEST_PERCENTAGE:-0.001}, \"number_of_replicas\": 0, \"bulk_indexing_clients\": ${BULK_CLIENTS}, \"test_iterations\": ${TEST_ITERATIONS:-100}, \"warmup_iterations\": 3, \"target_throughput\": 2}" \
   && OSB_EXIT=0 || OSB_EXIT=$?
 BENCH_END=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 BENCH_END_EPOCH=$(date +%s)

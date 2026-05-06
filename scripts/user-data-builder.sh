@@ -6,7 +6,7 @@ exec > /var/log/user-data.log 2>&1
 # user-data-builder.sh — Builds both DataFusion and Lucene OpenSearch from
 # source, packages each as tar.gz, uploads to S3, then shuts down.
 #
-# DataFusion build: JDK 25 + Rust + sandbox localDistro + 7 plugins + native lib
+# DataFusion build: JDK 25 + Rust + sandbox localDistro + 8 plugins + native lib
 # Lucene build:     JDK 21 + vanilla localDistro + discovery-ec2 plugin
 #
 # This instance is a temporary build machine — shuts down after uploading.
@@ -42,7 +42,7 @@ cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json << 'CWCO
     "logs_collected": {
       "files": {
         "collect_list": [
-          { "file_path": "/var/log/user-data.log", "log_group_name": "/opensearch/builder/user-data", "log_stream_name": "{{RUN_ID}}/{instance_id}-builder" }
+          { "file_path": "/var/log/user-data.log", "log_group_name": "{{LOG_GROUP_PREFIX}}/builder/user-data", "log_stream_name": "{{RUN_ID}}/{instance_id}-builder" }
         ]
       }
     }
@@ -52,7 +52,7 @@ CWCONFIG
 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json -s
 
 # =============================================================================
-# BUILD 1: DataFusion OpenSearch (sandbox + 7 plugins + native lib)
+# BUILD 1: DataFusion OpenSearch (sandbox + 8 plugins + native lib)
 # =============================================================================
 echo ""
 echo "============================================"
@@ -82,16 +82,17 @@ echo "=== Building localDistro (sandbox) ==="
 cd $SRC
 ./gradlew localDistro -Dsandbox.enabled=true -x javadoc -x test -x missingJavadoc
 
-# Build 7 sandbox plugin zips (6 production + 1 QA) (~1 min)
-echo "=== Building sandbox plugin zips ==="
+# Build arrow-flight-rpc plugin (analytics-engine depends on it) + 7 sandbox plugin zips (~1 min)
+echo "=== Building plugin zips ==="
 ./gradlew -Dsandbox.enabled=true \
+  :plugins:arrow-flight-rpc:bundlePlugin \
   :sandbox:plugins:analytics-engine:bundlePlugin \
   :sandbox:plugins:parquet-data-format:bundlePlugin \
   :sandbox:plugins:analytics-backend-datafusion:bundlePlugin \
   :sandbox:plugins:analytics-backend-lucene:bundlePlugin \
   :sandbox:plugins:dsl-query-executor:bundlePlugin \
   :sandbox:plugins:composite-engine:bundlePlugin \
-  :sandbox:qa:test-ppl-frontend:bundlePlugin \
+  :sandbox:plugins:test-ppl-frontend:bundlePlugin \
   -x test -x javadoc -x missingJavadoc
 
 # Prepare distribution directory
@@ -102,8 +103,12 @@ cp -r $SRC/build/distribution/local/opensearch-*/* $DIST/
 # Copy native library into distribution lib/
 cp $SRC/sandbox/libs/dataformat-native/rust/target/release/libopensearch_native.so $DIST/lib/
 
-# Install all 7 sandbox plugins
-echo "=== Installing sandbox plugins ==="
+# Install arrow-flight-rpc first (analytics-engine depends on it), then 7 sandbox plugins
+echo "=== Installing plugins ==="
+ARROW_ZIP=$(ls $SRC/plugins/arrow-flight-rpc/build/distributions/arrow-flight-rpc-*.zip | head -1)
+echo "  Installing: $(basename $ARROW_ZIP)"
+$DIST/bin/opensearch-plugin install --batch "file://$ARROW_ZIP"
+
 for zip in \
   $SRC/sandbox/plugins/analytics-engine/build/distributions/analytics-engine-*.zip \
   $SRC/sandbox/plugins/parquet-data-format/build/distributions/parquet-data-format-*.zip \
@@ -111,7 +116,7 @@ for zip in \
   $SRC/sandbox/plugins/analytics-backend-lucene/build/distributions/analytics-backend-lucene-*.zip \
   $SRC/sandbox/plugins/dsl-query-executor/build/distributions/dsl-query-executor-*.zip \
   $SRC/sandbox/plugins/composite-engine/build/distributions/composite-engine-*.zip \
-  $SRC/sandbox/qa/test-ppl-frontend/build/distributions/test-ppl-frontend-*.zip
+  $SRC/sandbox/plugins/test-ppl-frontend/build/distributions/test-ppl-frontend-*.zip
 do
   echo "  Installing: $(basename $zip)"
   $DIST/bin/opensearch-plugin install --batch "file://$zip"

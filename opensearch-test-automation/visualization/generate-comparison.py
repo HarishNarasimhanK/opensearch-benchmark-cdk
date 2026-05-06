@@ -125,8 +125,8 @@ def generate_html(df_data, lu_data, run_id, output_path):
         df_val = get_metric(df_data, 'error rate', df_norm[q])
         lu_val = get_metric(lu_data, 'error rate', lu_norm[q])
         heatmap_queries.append(q)
-        heatmap_df_err.append(round(df_val * 100, 1) if df_val is not None else 0)
-        heatmap_lu_err.append(round(lu_val * 100, 1) if lu_val is not None else 0)
+        heatmap_df_err.append(round(df_val , 1) if df_val is not None else 0)
+        heatmap_lu_err.append(round(lu_val , 1) if lu_val is not None else 0)
     # Plotly heatmap z is [rows][cols] — each row is a query, cols are [DataFusion, Lucene]
     heatmap_z = [[d, l] for d, l in zip(heatmap_df_err, heatmap_lu_err)]
     # Custom text for hover

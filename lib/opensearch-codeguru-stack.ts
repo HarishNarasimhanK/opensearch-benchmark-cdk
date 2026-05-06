@@ -23,9 +23,12 @@ interface OpenSearchCodeGuruStackProps extends cdk.StackProps {
   ebsIops: number;
   ebsThroughput: number;
   jvmHeap: string;
+  datafusionJvmHeap?: string;
   benchmarkEnabled: boolean;
   benchmarkInstanceType: string;
   benchmarkEbsSizeGb: number;
+  benchmarkEbsIops: number;
+  benchmarkEbsThroughput: number;
   workloadRepo: string;
   workloadBranch: string;
   testIterations: number;
@@ -39,6 +42,7 @@ interface OpenSearchCodeGuruStackProps extends cdk.StackProps {
   metricsStorePort: string;
   metricsStoreSecure: string;
   runId: string;
+  runIdPrefix: string;
 }
 
 export class OpenSearchCodeGuruStack extends cdk.Stack {
@@ -48,11 +52,16 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
     const { branch, opensearchRepo, vpcId, subnetId, subnetAz, securityGroupId, keyPairName,
       s3ProfileBucket, instanceType, ebsSizeGb, ebsIops,
       ebsThroughput, jvmHeap, benchmarkEnabled, benchmarkInstanceType, benchmarkEbsSizeGb,
+      benchmarkEbsIops, benchmarkEbsThroughput,
       workloadRepo, workloadBranch, testIterations, ingestPercentage, luceneEnabled, luceneRepo, luceneBranch,
-      clusterMode, dataNodeCount, metricsStoreHost, metricsStorePort, metricsStoreSecure, runId } = props;
+      clusterMode, dataNodeCount, metricsStoreHost, metricsStorePort, metricsStoreSecure, runId, runIdPrefix } = props;
+
+    const datafusionJvmHeap = props.datafusionJvmHeap || jvmHeap;
 
     const isMultiNode = clusterMode === "multi";
     const clusterTag = `${id}-datafusion-cluster`;
+    // Log group prefix: "/opensearch" for normal, "/opensearch/nightly" for nightly
+    const logGroupPrefix = runIdPrefix ? `/opensearch/${runIdPrefix}` : "/opensearch";
 
     // --- Look up existing VPC and Subnet ---
     const vpc = ec2.Vpc.fromLookup(this, "ExistingVpc", { vpcId });
@@ -127,14 +136,15 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
     const createDataFusionInstance = (nodeId: string, ltId: string, nodeName: string, nodeRoles: string): ec2.Instance => {
       const script = fs.readFileSync(path.join(__dirname, "..", "scripts", "user-data-datafusion.sh"), "utf-8")
         .replace(/\{\{S3_PROFILE_BUCKET\}\}/g, s3ProfileBucket)
-        .replace(/\{\{JVM_HEAP\}\}/g, jvmHeap)
+        .replace(/\{\{JVM_HEAP\}\}/g, datafusionJvmHeap)
         .replace(/\{\{SCRIPTS_S3_PATH\}\}/g, scriptsS3Path)
         .replace(/\{\{CLUSTER_MODE\}\}/g, clusterMode)
         .replace(/\{\{CLUSTER_TAG\}\}/g, clusterTag)
         .replace(/\{\{NODE_NAME\}\}/g, nodeName)
         .replace(/\{\{NODE_ROLES\}\}/g, nodeRoles)
         .replace(/\{\{BENCHMARK_ENABLED\}\}/g, String(benchmarkEnabled))
-        .replace(/\{\{RUN_ID\}\}/g, runId);
+        .replace(/\{\{RUN_ID\}\}/g, runId)
+        .replace(/\{\{LOG_GROUP_PREFIX\}\}/g, logGroupPrefix);
 
       const inst = createInstance(nodeId, ltId, script, instanceType, ebsSizeGb, ebsIops, ebsThroughput);
       const nameTag = nodeName ? `${id}-DataFusion-${runId}-${nodeName}` : `${id}-DataFusion-${runId}`;
@@ -156,7 +166,8 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
       .replace(/\{\{LUCENE_BRANCH\}\}/g, luceneBranch)
       .replace(/\{\{LUCENE_REPO\}\}/g, luceneRepo)
       .replace(/\{\{S3_PROFILE_BUCKET\}\}/g, s3ProfileBucket)
-      .replace(/\{\{RUN_ID\}\}/g, runId);
+      .replace(/\{\{RUN_ID\}\}/g, runId)
+      .replace(/\{\{LOG_GROUP_PREFIX\}\}/g, logGroupPrefix);
 
     const builderInstance = createInstance("BuilderInstance", "BuilderLt", builderScript, instanceType, ebsSizeGb, ebsIops, ebsThroughput);
     cdk.Tags.of(builderInstance).add("Name", `${id}-Builder-${runId}`);
@@ -183,6 +194,7 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
       for (let i = 1; i <= dataNodeCount; i++) {
         const data = createDataFusionInstance(`DataNode${i}`, `DataNode${i}Lt`, `dataNode-${i}`, "data, ingest");
         dataInstances.push(data);
+        if (i === 1) datafusionInstanceId = data.instanceId;  // Use first data node for CloudWatch dashboard
         new cdk.CfnOutput(this, `B2DataNode${i}SSH`, { value: `ssh -i ~/${keyPairName}.pem ec2-user@${data.instancePublicDnsName}` });
       }
 
@@ -241,7 +253,9 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
           .replace(/\{\{CLUSTER_TAG\}\}/g, luceneClusterTag)
           .replace(/\{\{NODE_NAME\}\}/g, nodeName)
           .replace(/\{\{NODE_ROLES\}\}/g, nodeRoles)
-          .replace(/\{\{RUN_ID\}\}/g, runId);
+          .replace(/\{\{BENCHMARK_ENABLED\}\}/g, String(benchmarkEnabled))
+          .replace(/\{\{RUN_ID\}\}/g, runId)
+          .replace(/\{\{LOG_GROUP_PREFIX\}\}/g, logGroupPrefix);
 
         const inst = createInstance(nodeId, ltId, script, instanceType, ebsSizeGb, ebsIops, ebsThroughput);
         const nameTag = nodeName ? `${id}-Lucene-${runId}-${nodeName}` : `${id}-Lucene-${runId}`;
@@ -267,6 +281,7 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
         for (let i = 1; i <= dataNodeCount; i++) {
           const data = createLuceneInstance(`LuceneDataNode${i}`, `LuceneDataNode${i}Lt`, `dataNode-${i}`, "data, ingest");
           luceneDataInstances.push(data);
+          if (i === 1) luceneInstanceId = data.instanceId;  // Use first data node for CloudWatch dashboard
           new cdk.CfnOutput(this, `C2LuceneDataNode${i}SSH`, { value: `ssh -i ~/${keyPairName}.pem ec2-user@${data.instancePublicDnsName}` });
         }
 
@@ -324,9 +339,10 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
         .replace(/\{\{METRICS_STORE_SECURE\}\}/g, metricsStoreSecure)
         .replace(/\{\{TEST_ITERATIONS\}\}/g, String(testIterations))
         .replace(/\{\{INGEST_PERCENTAGE\}\}/g, String(ingestPercentage))
-        .replace(/\{\{RUN_ID\}\}/g, runId);
+        .replace(/\{\{RUN_ID\}\}/g, runId)
+        .replace(/\{\{LOG_GROUP_PREFIX\}\}/g, logGroupPrefix);
 
-      const benchmarkInstance = createInstance("BenchmarkInstance", "BenchmarkLt", benchmarkScript, benchmarkInstanceType, benchmarkEbsSizeGb);
+      const benchmarkInstance = createInstance("BenchmarkInstance", "BenchmarkLt", benchmarkScript, benchmarkInstanceType, benchmarkEbsSizeGb, benchmarkEbsIops, benchmarkEbsThroughput);
       cdk.Tags.of(benchmarkInstance).add("Name", `${id}-Benchmark-${runId}`);
 
       new cdk.CfnOutput(this, "D1_BenchmarkSSH", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${benchmarkInstance.instancePublicDnsName}` });
@@ -398,14 +414,14 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
       });
 
     dashboard.addWidgets(
-      vmstatWidget("DataFusion — Free Memory (KB)", "/opensearch/datafusion/vmstat", "free"),
-      vmstatWidget("DataFusion — Buffer (KB)", "/opensearch/datafusion/vmstat", "buff"),
-      vmstatWidget("DataFusion — Cache (KB)", "/opensearch/datafusion/vmstat", "cache"),
+      vmstatWidget("DataFusion — Free Memory (KB)", `${logGroupPrefix}/datafusion/vmstat`, "free"),
+      vmstatWidget("DataFusion — Buffer (KB)", `${logGroupPrefix}/datafusion/vmstat`, "buff"),
+      vmstatWidget("DataFusion — Cache (KB)", `${logGroupPrefix}/datafusion/vmstat`, "cache"),
     );
     dashboard.addWidgets(
-      vmstatWidget("Lucene — Free Memory (KB)", "/opensearch/lucene/vmstat", "free"),
-      vmstatWidget("Lucene — Buffer (KB)", "/opensearch/lucene/vmstat", "buff"),
-      vmstatWidget("Lucene — Cache (KB)", "/opensearch/lucene/vmstat", "cache"),
+      vmstatWidget("Lucene — Free Memory (KB)", `${logGroupPrefix}/lucene/vmstat`, "free"),
+      vmstatWidget("Lucene — Buffer (KB)", `${logGroupPrefix}/lucene/vmstat`, "buff"),
+      vmstatWidget("Lucene — Cache (KB)", `${logGroupPrefix}/lucene/vmstat`, "cache"),
     );
 
     new cdk.CfnOutput(this, "G1_CloudWatchDashboard", {

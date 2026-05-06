@@ -27,18 +27,19 @@ const subnetId = process.env.SUBNET_ID;
 const subnetAz = process.env.SUBNET_AZ;
 const keyPairName = process.env.KEY_PAIR_NAME;
 const securityGroupId = process.env.SECURITY_GROUP_ID;
-const s3ProfileBucket = process.env.S3_BUCKET || "opensearch-codeguru";
+const s3ProfileBucket = app.node.tryGetContext("s3Bucket") || process.env.S3_BUCKET || "opensearch-codeguru";
 
 // --- Instance config ---
 const instanceType = process.env.INSTANCE_TYPE || "r7g.2xlarge";
-const ebsSizeGb = parseInt(process.env.EBS_SIZE_GB || "100", 10);
-const ebsIops = parseInt(process.env.EBS_IOPS || "3000", 10);
-const ebsThroughput = parseInt(process.env.EBS_THROUGHPUT || "125", 10);
-const jvmHeap = process.env.JVM_HEAP || "8g";
+const ebsSizeGb = parseInt(process.env.EBS_SIZE_GB || "1000", 10);
+const ebsIops = parseInt(process.env.EBS_IOPS || "12000", 10);
+const ebsThroughput = parseInt(process.env.EBS_THROUGHPUT || "500", 10);
+const jvmHeap = process.env.JVM_HEAP || "32g";
+const datafusionJvmHeap = "16g";
 
-// --- DataFusion OpenSearch config (sandbox main-benchmark) ---
-const branch = app.node.tryGetContext("datafusionBranch") || process.env.DATAFUSION_BRANCH || "main-benchmark";
-const opensearchRepo = app.node.tryGetContext("datafusionRepo") || process.env.DATAFUSION_REPO || "https://github.com/AjayRajNelapudi/OpenSearch.git";
+// --- DataFusion OpenSearch config (upstream main) ---
+const branch = app.node.tryGetContext("datafusionBranch") || process.env.DATAFUSION_BRANCH || "main";
+const opensearchRepo = app.node.tryGetContext("datafusionRepo") || process.env.DATAFUSION_REPO || "https://github.com/opensearch-project/OpenSearch.git";
 
 // --- Lucene OpenSearch config (no plugins — DSL queries only) ---
 const luceneEnabled = (process.env.LUCENE_ENABLED || "true").toLowerCase() === "true";
@@ -53,9 +54,11 @@ const dataNodeCount = parseInt(app.node.tryGetContext("dataNodeCount") || proces
 const benchmarkEnabled = (app.node.tryGetContext("benchmarkEnabled") || process.env.BENCHMARK_ENABLED || "true").toLowerCase() === "true";
 const benchmarkInstanceType = process.env.BENCHMARK_INSTANCE_TYPE || "m7g.medium";
 const benchmarkEbsSizeGb = parseInt(process.env.BENCHMARK_EBS_SIZE_GB || "500", 10);
-const workloadRepo = app.node.tryGetContext("workloadRepo") || process.env.WORKLOAD_REPO || "https://github.com/AjayRajNelapudi/opensearch-benchmark-workloads.git";
-const workloadBranch = app.node.tryGetContext("workloadBranch") || process.env.WORKLOAD_BRANCH || "indexing";
-const testIterations = parseInt(app.node.tryGetContext("testIterations") || process.env.TEST_ITERATIONS || "10", 10);
+const benchmarkEbsIops = parseInt(process.env.BENCHMARK_EBS_IOPS || "10000", 10);
+const benchmarkEbsThroughput = parseInt(process.env.BENCHMARK_EBS_THROUGHPUT || "500", 10);
+const workloadRepo = app.node.tryGetContext("workloadRepo") || process.env.WORKLOAD_REPO || "https://github.com/HarishNarasimhanK/opensearch-benchmark-workloads.git";
+const workloadBranch = app.node.tryGetContext("workloadBranch") || process.env.WORKLOAD_BRANCH || "nightly";
+const testIterations = parseInt(app.node.tryGetContext("testIterations") || process.env.TEST_ITERATIONS || "100", 10);
 const ingestPercentage = parseFloat(app.node.tryGetContext("ingestPercentage") || process.env.INGEST_PERCENTAGE || "0.001");
 
 // --- Metrics store config ---
@@ -70,8 +73,10 @@ const stackName = stackSuffix
   : "OpenSearchCodeGuruStack";
 
 // --- Run ID (generated at deploy time, shared across all instances) ---
+const runIdPrefix = app.node.tryGetContext("runIdPrefix") || process.env.RUN_ID_PREFIX || "";
 const now = new Date();
-const runId = `run-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}_${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}${String(now.getSeconds()).padStart(2, "0")}`;
+const timestamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}_${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}${String(now.getSeconds()).padStart(2, "0")}`;
+const runId = runIdPrefix ? `${runIdPrefix}-run-${timestamp}` : `run-${timestamp}`;
 
 if (!vpcId || !subnetId || !subnetAz || !keyPairName || !securityGroupId) {
   throw new Error("VPC_ID, SUBNET_ID, SUBNET_AZ, SECURITY_GROUP_ID, and KEY_PAIR_NAME must be set in .env");
@@ -92,9 +97,12 @@ new OpenSearchCodeGuruStack(app, stackName, {
   ebsIops,
   ebsThroughput,
   jvmHeap,
+  datafusionJvmHeap,
   benchmarkEnabled,
   benchmarkInstanceType,
   benchmarkEbsSizeGb,
+  benchmarkEbsIops,
+  benchmarkEbsThroughput,
   workloadRepo,
   workloadBranch,
   testIterations,
@@ -108,4 +116,5 @@ new OpenSearchCodeGuruStack(app, stackName, {
   metricsStorePort,
   metricsStoreSecure,
   runId,
+  runIdPrefix,
 });

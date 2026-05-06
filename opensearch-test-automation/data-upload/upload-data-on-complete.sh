@@ -66,20 +66,27 @@ while true; do
     fi
     S3_TARGET="s3://${S3_BUCKET}/runs/${RUN_ID}/data/${ENGINE}/${INSTANCE_LABEL}/data.tar.gz"
 
-    # --- Wait for data directory to exist and have content ---
+    # --- Wait for data directory to exist and have content (infinite poll) ---
     echo "Waiting for data directory to be populated..."
-    for i in $(seq 1 120); do
+    i=0
+    while true; do
       if [ -d "$DATA_DIR" ] && [ "$(ls -A "$DATA_DIR" 2>/dev/null)" ]; then
         echo "Data directory exists and has content."
         break
       fi
-      if [ $i -eq 120 ]; then
-        echo "⚠️  Data directory still empty after 60 minutes. Uploading anyway."
-        break
+      i=$((i + 1))
+      if [ $((i % 20)) -eq 0 ]; then
+        echo "  Data dir not ready yet (attempt $i)..."
       fi
-      echo "  Data dir not ready yet (attempt $i/120)..."
       sleep 30
     done
+
+    # --- Capture storage sizes BEFORE tarring (need live folder structure) ---
+    if [ -f "$HOME/opensearch-test-automation/storage-metrics/capture-storage-sizes.sh" ]; then
+      echo "Capturing storage sizes..."
+      bash "$HOME/opensearch-test-automation/storage-metrics/capture-storage-sizes.sh" || \
+        echo "WARNING: Storage size capture failed (non-fatal)"
+    fi
 
     # --- Upload ---
     if [ -d "$DATA_DIR" ] && [ "$(ls -A "$DATA_DIR" 2>/dev/null)" ]; then

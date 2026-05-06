@@ -90,8 +90,8 @@ Per engine: 3 cluster managers + N data nodes + internal ALB. Uses EC2 tag-based
 |---|---|---|
 | `-c clusterMode=multi` | `single` | Enable multi-node cluster mode |
 | `-c dataNodeCount=3` | `3` | Number of data nodes per engine (multi-node only) |
-| `-c datafusionBranch=<branch>` | `main-benchmark` | DataFusion OpenSearch branch |
-| `-c datafusionRepo=<url>` | `AjayRajNelapudi/OpenSearch` | DataFusion OpenSearch repo |
+| `-c datafusionBranch=<branch>` | `main` | DataFusion OpenSearch branch |
+| `-c datafusionRepo=<url>` | `opensearch-project/OpenSearch` | DataFusion OpenSearch repo |
 | `-c luceneBranch=<branch>` | `main` | Lucene OpenSearch branch |
 | `-c luceneRepo=<url>` | `opensearch-project/OpenSearch` | Lucene OpenSearch repo |
 | `-c workloadRepo=<url>` | `AjayRajNelapudi/opensearch-benchmark-workloads` | OSB benchmark workloads repo |

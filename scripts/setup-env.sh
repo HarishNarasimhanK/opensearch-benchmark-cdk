@@ -318,8 +318,8 @@ PEM_PATH=\$HOME/$KEY_NAME.pem
 S3_BUCKET=$S3_BUCKET
 
 # DataFusion OpenSearch build config (defaults — override as needed)
-# DATAFUSION_REPO=https://github.com/AjayRajNelapudi/OpenSearch.git
-# DATAFUSION_BRANCH=main-benchmark
+# DATAFUSION_REPO=https://github.com/opensearch-project/OpenSearch.git
+# DATAFUSION_BRANCH=main
 
 # Instance config (defaults — override as needed)
 # INSTANCE_TYPE=r7g.2xlarge

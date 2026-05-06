@@ -36,6 +36,16 @@ if [ -z "$PID" ]; then
 fi
 echo "Profiling OpenSearch PID: $PID"
 
-FILENAME="cpu_${TIMESTAMP}.html"
-$PROFILER -d 60 -f "$OUTPUT_DIR/$FILENAME" "$PID"
-aws s3 cp "$OUTPUT_DIR/$FILENAME" "s3://${S3_BUCKET}/runs/${RUN_ID}/profiler/${ENGINE}/${INSTANCE_LABEL}/$FILENAME"
+FILENAME="wall_${TIMESTAMP}.html"
+$PROFILER -d 60 -e wall -t -f "$OUTPUT_DIR/$FILENAME" "$PID"
+aws s3 cp "$OUTPUT_DIR/$FILENAME" "s3://${S3_BUCKET}/runs/${RUN_ID}/profiler/${ENGINE}/${INSTANCE_LABEL}/wall/$FILENAME"
+
+# Also capture CPU profile
+CPU_FILENAME="cpu_${TIMESTAMP}.html"
+$PROFILER -d 60 -e cpu -t -f "$OUTPUT_DIR/$CPU_FILENAME" "$PID"
+aws s3 cp "$OUTPUT_DIR/$CPU_FILENAME" "s3://${S3_BUCKET}/runs/${RUN_ID}/profiler/${ENGINE}/${INSTANCE_LABEL}/cpu/$CPU_FILENAME"
+
+# Also capture allocation (memory) profile
+ALLOC_FILENAME="alloc_${TIMESTAMP}.html"
+$PROFILER -d 60 -e alloc -t -f "$OUTPUT_DIR/$ALLOC_FILENAME" "$PID"
+aws s3 cp "$OUTPUT_DIR/$ALLOC_FILENAME" "s3://${S3_BUCKET}/runs/${RUN_ID}/profiler/${ENGINE}/${INSTANCE_LABEL}/alloc/$ALLOC_FILENAME"

@@ -16,13 +16,13 @@ cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json << 'CWCO
     "logs_collected": {
       "files": {
         "collect_list": [
-          { "file_path": "/var/log/user-data.log", "log_group_name": "/opensearch/benchmark/user-data", "log_stream_name": "{{RUN_ID}}/{instance_id}-benchmark" },
-          { "file_path": "/home/ec2-user/benchmark-run.log", "log_group_name": "/opensearch/benchmark/run", "log_stream_name": "{{RUN_ID}}/{instance_id}-benchmark" },
-          { "file_path": "/home/ec2-user/field-integrity.log", "log_group_name": "/opensearch/benchmark/field-integrity", "log_stream_name": "{{RUN_ID}}/{instance_id}-benchmark" },
-          { "file_path": "/home/ec2-user/benchmark-lucene.log", "log_group_name": "/opensearch/benchmark/lucene", "log_stream_name": "{{RUN_ID}}/{instance_id}-benchmark" },
-          { "file_path": "/home/ec2-user/benchmark-datafusion.log", "log_group_name": "/opensearch/benchmark/datafusion", "log_stream_name": "{{RUN_ID}}/{instance_id}-benchmark" },
-          { "file_path": "/home/ec2-user/correctness-lucene.log", "log_group_name": "/opensearch/benchmark/correctness-lucene", "log_stream_name": "{{RUN_ID}}/{instance_id}-benchmark" },
-          { "file_path": "/home/ec2-user/correctness-datafusion.log", "log_group_name": "/opensearch/benchmark/correctness-datafusion", "log_stream_name": "{{RUN_ID}}/{instance_id}-benchmark" }
+          { "file_path": "/var/log/user-data.log", "log_group_name": "{{LOG_GROUP_PREFIX}}/benchmark/user-data", "log_stream_name": "{{RUN_ID}}/{instance_id}-benchmark" },
+          { "file_path": "/home/ec2-user/benchmark-run.log", "log_group_name": "{{LOG_GROUP_PREFIX}}/benchmark/run", "log_stream_name": "{{RUN_ID}}/{instance_id}-benchmark" },
+          { "file_path": "/home/ec2-user/field-integrity.log", "log_group_name": "{{LOG_GROUP_PREFIX}}/benchmark/field-integrity", "log_stream_name": "{{RUN_ID}}/{instance_id}-benchmark" },
+          { "file_path": "/home/ec2-user/benchmark-lucene.log", "log_group_name": "{{LOG_GROUP_PREFIX}}/benchmark/lucene", "log_stream_name": "{{RUN_ID}}/{instance_id}-benchmark" },
+          { "file_path": "/home/ec2-user/benchmark-datafusion.log", "log_group_name": "{{LOG_GROUP_PREFIX}}/benchmark/datafusion", "log_stream_name": "{{RUN_ID}}/{instance_id}-benchmark" },
+          { "file_path": "/home/ec2-user/correctness-lucene.log", "log_group_name": "{{LOG_GROUP_PREFIX}}/benchmark/correctness-lucene", "log_stream_name": "{{RUN_ID}}/{instance_id}-benchmark" },
+          { "file_path": "/home/ec2-user/correctness-datafusion.log", "log_group_name": "{{LOG_GROUP_PREFIX}}/benchmark/correctness-datafusion", "log_stream_name": "{{RUN_ID}}/{instance_id}-benchmark" }
         ]
       }
     }
