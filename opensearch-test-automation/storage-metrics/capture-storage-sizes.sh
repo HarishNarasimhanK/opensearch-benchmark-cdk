@@ -89,9 +89,17 @@ echo "============================================"
       "index_uuid": "${INDEX_UUID}",
       "shard": ${SHARD_NUM},
       "parquet_bytes": ${PARQUET_BYTES},
+      "parquet_mb": $(awk "BEGIN {printf \"%.2f\", ${PARQUET_BYTES}/1024/1024}"),
+      "parquet_gb": $(awk "BEGIN {printf \"%.3f\", ${PARQUET_BYTES}/1024/1024/1024}"),
       "lucene_excluding_segments_bytes": ${INDEX_NON_SEGMENTS_BYTES},
+      "lucene_excluding_segments_mb": $(awk "BEGIN {printf \"%.2f\", ${INDEX_NON_SEGMENTS_BYTES}/1024/1024}"),
+      "lucene_excluding_segments_gb": $(awk "BEGIN {printf \"%.3f\", ${INDEX_NON_SEGMENTS_BYTES}/1024/1024/1024}"),
       "lucene_segments_only_bytes": ${SEGMENTS_BYTES},
-      "translog_bytes": ${TRANSLOG_BYTES}
+      "lucene_segments_only_mb": $(awk "BEGIN {printf \"%.2f\", ${SEGMENTS_BYTES}/1024/1024}"),
+      "lucene_segments_only_gb": $(awk "BEGIN {printf \"%.3f\", ${SEGMENTS_BYTES}/1024/1024/1024}"),
+      "translog_bytes": ${TRANSLOG_BYTES},
+      "translog_mb": $(awk "BEGIN {printf \"%.2f\", ${TRANSLOG_BYTES}/1024/1024}"),
+      "translog_gb": $(awk "BEGIN {printf \"%.3f\", ${TRANSLOG_BYTES}/1024/1024/1024}")
     }
 EOF
   done

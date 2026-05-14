@@ -94,8 +94,10 @@ Per engine: 3 cluster managers + N data nodes + internal ALB. Uses EC2 tag-based
 | `-c datafusionRepo=<url>` | `opensearch-project/OpenSearch` | DataFusion OpenSearch repo |
 | `-c luceneBranch=<branch>` | `main` | Lucene OpenSearch branch |
 | `-c luceneRepo=<url>` | `opensearch-project/OpenSearch` | Lucene OpenSearch repo |
-| `-c workloadRepo=<url>` | `AjayRajNelapudi/opensearch-benchmark-workloads` | OSB benchmark workloads repo |
-| `-c workloadBranch=<branch>` | `indexing` | OSB benchmark workloads branch |
+| `-c datafusionWorkloadRepo=<url>` | `HarishNarasimhanK/opensearch-benchmark-workloads` | OSB benchmark workloads repo for DataFusion engine |
+| `-c datafusionWorkloadBranch=<branch>` | `nightly` | DataFusion workloads branch |
+| `-c luceneWorkloadRepo=<url>` | `opensearch-project/opensearch-benchmark-workloads` | OSB benchmark workloads repo for Lucene engine |
+| `-c luceneWorkloadBranch=<branch>` | `main` | Lucene workloads branch |
 | `-c testIterations=<N>` | `20` | Number of query iterations per benchmark run (higher = better percentile data) |
 | `-c ingestPercentage=<N>` | `0.001` | Fraction of ClickBench dataset to ingest (0.001 = ~1000 docs, 1 = full 100M) |
 | `-c benchmarkEnabled=false` | `true` | Set to `false` to skip benchmark instance — deploys only Builder + DataFusion + Lucene OpenSearch. Users bring their own benchmark setup. CloudWatch metrics, logs, vmstat, and async-profiler still run on the OpenSearch instances. |

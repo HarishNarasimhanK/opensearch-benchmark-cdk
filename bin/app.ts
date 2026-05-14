@@ -56,8 +56,10 @@ const benchmarkInstanceType = process.env.BENCHMARK_INSTANCE_TYPE || "m7g.medium
 const benchmarkEbsSizeGb = parseInt(process.env.BENCHMARK_EBS_SIZE_GB || "500", 10);
 const benchmarkEbsIops = parseInt(process.env.BENCHMARK_EBS_IOPS || "10000", 10);
 const benchmarkEbsThroughput = parseInt(process.env.BENCHMARK_EBS_THROUGHPUT || "500", 10);
-const workloadRepo = app.node.tryGetContext("workloadRepo") || process.env.WORKLOAD_REPO || "https://github.com/HarishNarasimhanK/opensearch-benchmark-workloads.git";
-const workloadBranch = app.node.tryGetContext("workloadBranch") || process.env.WORKLOAD_BRANCH || "nightly";
+const datafusionWorkloadRepo = app.node.tryGetContext("datafusionWorkloadRepo") || process.env.DATAFUSION_WORKLOAD_REPO || "https://github.com/HarishNarasimhanK/opensearch-benchmark-workloads.git";
+const datafusionWorkloadBranch = app.node.tryGetContext("datafusionWorkloadBranch") || process.env.DATAFUSION_WORKLOAD_BRANCH || "nightly";
+const luceneWorkloadRepo = app.node.tryGetContext("luceneWorkloadRepo") || process.env.LUCENE_WORKLOAD_REPO || "https://github.com/opensearch-project/opensearch-benchmark-workloads.git";
+const luceneWorkloadBranch = app.node.tryGetContext("luceneWorkloadBranch") || process.env.LUCENE_WORKLOAD_BRANCH || "main";
 const testIterations = parseInt(app.node.tryGetContext("testIterations") || process.env.TEST_ITERATIONS || "100", 10);
 const ingestPercentage = parseFloat(app.node.tryGetContext("ingestPercentage") || process.env.INGEST_PERCENTAGE || "0.001");
 
@@ -103,8 +105,10 @@ new OpenSearchCodeGuruStack(app, stackName, {
   benchmarkEbsSizeGb,
   benchmarkEbsIops,
   benchmarkEbsThroughput,
-  workloadRepo,
-  workloadBranch,
+  datafusionWorkloadRepo,
+  datafusionWorkloadBranch,
+  luceneWorkloadRepo,
+  luceneWorkloadBranch,
   testIterations,
   ingestPercentage,
   luceneEnabled,

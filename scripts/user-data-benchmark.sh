@@ -64,8 +64,8 @@ chown ec2-user:ec2-user /home/ec2-user/.opensearch-env
 
 # --- Step 4: Clone repos ---
 su -l ec2-user -c 'aws s3 cp {{SCRIPTS_S3_PATH}} /tmp/automation-scripts.zip && mkdir -p /home/ec2-user/opensearch-test-automation && cd /home/ec2-user/opensearch-test-automation && unzip -o /tmp/automation-scripts.zip && chmod +x /home/ec2-user/opensearch-test-automation/**/*.sh && rm /tmp/automation-scripts.zip'
-su -l ec2-user -c 'git clone -b {{WORKLOAD_BRANCH}} {{WORKLOAD_REPO}} /home/ec2-user/datafusion-workloads'
-su -l ec2-user -c 'git clone https://github.com/opensearch-project/opensearch-benchmark-workloads.git /home/ec2-user/lucene-workloads'
+su -l ec2-user -c 'git clone -b {{DATAFUSION_WORKLOAD_BRANCH}} {{DATAFUSION_WORKLOAD_REPO}} /home/ec2-user/datafusion-workloads'
+su -l ec2-user -c 'git clone -b {{LUCENE_WORKLOAD_BRANCH}} {{LUCENE_WORKLOAD_REPO}} /home/ec2-user/lucene-workloads'
 
 # --- Step 4b: Pre-download corpus (DISABLED — see FUTURE-ADDITIONS.md item 4) ---
 # Uncomment to warm the OSB cache with a local throwaway OpenSearch.

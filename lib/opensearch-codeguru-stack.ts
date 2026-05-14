@@ -29,8 +29,10 @@ interface OpenSearchCodeGuruStackProps extends cdk.StackProps {
   benchmarkEbsSizeGb: number;
   benchmarkEbsIops: number;
   benchmarkEbsThroughput: number;
-  workloadRepo: string;
-  workloadBranch: string;
+  datafusionWorkloadRepo: string;
+  datafusionWorkloadBranch: string;
+  luceneWorkloadRepo: string;
+  luceneWorkloadBranch: string;
   testIterations: number;
   ingestPercentage: number;
   luceneEnabled: boolean;
@@ -53,7 +55,8 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
       s3ProfileBucket, instanceType, ebsSizeGb, ebsIops,
       ebsThroughput, jvmHeap, benchmarkEnabled, benchmarkInstanceType, benchmarkEbsSizeGb,
       benchmarkEbsIops, benchmarkEbsThroughput,
-      workloadRepo, workloadBranch, testIterations, ingestPercentage, luceneEnabled, luceneRepo, luceneBranch,
+      datafusionWorkloadRepo, datafusionWorkloadBranch, luceneWorkloadRepo, luceneWorkloadBranch,
+      testIterations, ingestPercentage, luceneEnabled, luceneRepo, luceneBranch,
       clusterMode, dataNodeCount, metricsStoreHost, metricsStorePort, metricsStoreSecure, runId, runIdPrefix } = props;
 
     const datafusionJvmHeap = props.datafusionJvmHeap || jvmHeap;
@@ -327,8 +330,10 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
     // =========================================================================
     if (benchmarkEnabled) {
       const benchmarkScript = fs.readFileSync(path.join(__dirname, "..", "scripts", "user-data-benchmark.sh"), "utf-8")
-        .replace(/\{\{WORKLOAD_REPO\}\}/g, workloadRepo)
-        .replace(/\{\{WORKLOAD_BRANCH\}\}/g, workloadBranch)
+        .replace(/\{\{DATAFUSION_WORKLOAD_REPO\}\}/g, datafusionWorkloadRepo)
+        .replace(/\{\{DATAFUSION_WORKLOAD_BRANCH\}\}/g, datafusionWorkloadBranch)
+        .replace(/\{\{LUCENE_WORKLOAD_REPO\}\}/g, luceneWorkloadRepo)
+        .replace(/\{\{LUCENE_WORKLOAD_BRANCH\}\}/g, luceneWorkloadBranch)
         .replace(/\{\{DATAFUSION_PRIVATE_IP\}\}/g, datafusionEndpoint)
         .replace(/\{\{LUCENE_PRIVATE_IP\}\}/g, luceneEndpoint)
         .replace(/\{\{S3_PROFILE_BUCKET\}\}/g, s3ProfileBucket)
