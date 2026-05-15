@@ -6,7 +6,7 @@ set -eo pipefail
 # uploads the OpenSearch data folder to S3.
 #
 # Reads config from ~/.opensearch-env:
-#   ENGINE       — "datafusion" or "lucene" (used for S3 path)
+#   ENGINE       — "parquet" or "lucene" (used for S3 path)
 #   S3_BUCKET    — S3 bucket name
 #
 # The OpenSearch home directory is auto-detected based on ENGINE.
@@ -33,8 +33,10 @@ if [ -z "$INSTANCE_ID" ]; then
 fi
 
 # Determine OpenSearch data directory based on engine
-if [ "$ENGINE" = "datafusion" ]; then
-  DATA_DIR="$HOME/datafusion-opensearch/data"
+if [ "$ENGINE" = "parquet" ]; then
+  DATA_DIR="$HOME/parquet-opensearch/data"
+elif [ "$ENGINE" = "parquetLucene" ]; then
+  DATA_DIR="$HOME/parquetLucene-opensearch/data"
 elif [ "$ENGINE" = "lucene" ]; then
   DATA_DIR="$HOME/lucene-opensearch/data"
 else
@@ -81,16 +83,16 @@ while true; do
       sleep 30
     done
 
+    # --- Wait 30 min for segment merges to complete ---
+    echo "Waiting 30 minutes for segment merges to complete..."
+    sleep 1800
+
     # --- Capture storage sizes BEFORE tarring (need live folder structure) ---
     if [ -f "$HOME/opensearch-test-automation/storage-metrics/capture-storage-sizes.sh" ]; then
       echo "Capturing storage sizes..."
       bash "$HOME/opensearch-test-automation/storage-metrics/capture-storage-sizes.sh" || \
         echo "WARNING: Storage size capture failed (non-fatal)"
     fi
-
-    # --- Wait 30 min for segment merges to complete ---
-    echo "Waiting 30 minutes for segment merges to complete..."
-    sleep 1800
 
     # --- Stop OpenSearch before tarring to avoid 'file changed' errors ---
     echo "Stopping OpenSearch..."

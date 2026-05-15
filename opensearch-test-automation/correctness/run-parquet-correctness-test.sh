@@ -6,7 +6,7 @@ set -euo pipefail
 #
 # Usage:
 #   bash correctness/run-correctness-test.sh <host> <engine-name>
-#   bash correctness/run-correctness-test.sh 172.31.85.56 datafusion
+#   bash correctness/run-correctness-test.sh 172.31.85.56 parquet
 #   bash correctness/run-correctness-test.sh 172.31.81.86 lucene
 #
 # Reads S3_BUCKET from ~/.opensearch-env

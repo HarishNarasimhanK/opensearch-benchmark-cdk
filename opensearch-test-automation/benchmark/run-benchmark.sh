@@ -6,7 +6,7 @@ set -euo pipefail
 #
 # Usage:
 #   bash run-benchmark.sh --host <ip> --engine <name> --workload <path>
-#   bash run-benchmark.sh --host 172.31.85.56 --engine datafusion --workload ~/datafusion-workloads/clickbench
+#   bash run-benchmark.sh --host 172.31.85.56 --engine parquet --workload ~/parquet-workloads/clickbench
 #   bash run-benchmark.sh --host 172.31.81.86 --engine lucene --workload ~/lucene-workloads/clickbench
 #
 # Reads defaults from ~/.opensearch-env if args not provided.
@@ -33,7 +33,7 @@ done
 if [ -z "$OS_HOST" ] || [ -z "$ENGINE" ] || [ -z "$WORKLOAD_PATH" ]; then
   echo "Usage: $0 --host <ip> --engine <name> --workload <path>"
   echo "  --host      OpenSearch host IP"
-  echo "  --engine    Engine name (datafusion or lucene)"
+  echo "  --engine    Engine name (parquet or lucene)"
   echo "  --workload  Path to clickbench workload directory"
   exit 1
 fi
@@ -42,9 +42,9 @@ fi
 RUN_ID="${RUN_ID:-run-$(date +%Y%m%d_%H%M%S)}"
 BENCHMARK_ID="${RUN_ID}-${ENGINE}"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-# DataFusion sandbox only supports single shard; Lucene uses 1 shard per data node
-# DataFusion/Parquet needs ~50 bulk clients for CPU saturation; Lucene needs ~8
-if [ "$ENGINE" = "datafusion" ]; then
+# Parquet sandbox only supports single shard; Lucene uses 1 shard per data node
+# Parquet/Parquet needs ~50 bulk clients for CPU saturation; Lucene needs ~8
+if [ "$ENGINE" = "parquet" ]; then
   NUM_SHARDS=1
   BULK_CLIENTS=50
 else
@@ -89,7 +89,7 @@ for i in $(seq 1 120); do
 done
 
 # --- Select test procedure based on engine ---
-if [ "$ENGINE" = "datafusion" ]; then
+if [ "$ENGINE" = "parquet" ]; then
   TEST_PROCEDURE="datafusion-ppl"
 elif [ "$ENGINE" = "lucene" ]; then
   TEST_PROCEDURE="dsl-clickbench"

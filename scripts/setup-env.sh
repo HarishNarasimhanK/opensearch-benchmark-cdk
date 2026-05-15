@@ -317,9 +317,9 @@ PEM_PATH=\$HOME/$KEY_NAME.pem
 # S3 bucket for profiler, benchmark results, and correctness results
 S3_BUCKET=$S3_BUCKET
 
-# DataFusion OpenSearch build config (defaults — override as needed)
-# DATAFUSION_REPO=https://github.com/opensearch-project/OpenSearch.git
-# DATAFUSION_BRANCH=main
+# Parquet OpenSearch build config (defaults — override as needed)
+# PARQUET_REPO=https://github.com/opensearch-project/OpenSearch.git
+# PARQUET_BRANCH=main
 
 # Instance config (defaults — override as needed)
 # INSTANCE_TYPE=r7g.2xlarge

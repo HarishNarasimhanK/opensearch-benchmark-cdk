@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
 generate-comparison.py — Generates a single HTML file with 4 Plotly charts
-comparing DataFusion vs Lucene benchmark results.
+comparing Parquet vs Lucene benchmark results.
 
 Usage:
   python3 generate-comparison.py \
-    --datafusion-csv ~/benchmark-results/datafusion/benchmark-*.csv \
+    --parquet-csv ~/benchmark-results/parquet/benchmark-*.csv \
     --lucene-csv ~/benchmark-results/lucene/benchmark-*.csv \
     --output ~/benchmark-comparison.html \
     --run-id run-20260503_193554
@@ -14,7 +14,7 @@ Reads the OSB CSV format (Metric,Task,Value,Unit) and produces:
   1. P50 service time comparison (grouped bar, only passing queries)
   2. Pass/fail heatmap (green/red grid per engine)
   3. Latency percentile spread (p50/p90/p99 grouped bars, passing-on-both)
-  4. Latency scatter plot (DataFusion vs Lucene p50, diagonal = equal)
+  4. Latency scatter plot (Parquet vs Lucene p50, diagonal = equal)
 """
 
 import argparse
@@ -53,16 +53,16 @@ def normalize_task_name(task):
         return task[4:]
     return task
 
-def build_comparison_data(df_data, lu_data):
+def build_comparison_data(pq_data, lu_data):
     """Build aligned comparison data for common queries"""
-    df_tasks = get_query_tasks(df_data)
+    pq_tasks = get_query_tasks(pq_data)
     lu_tasks = get_query_tasks(lu_data)
 
     lu_norm = {normalize_task_name(t): t for t in lu_tasks}
-    df_norm = {normalize_task_name(t): t for t in df_tasks}
+    pq_norm = {normalize_task_name(t): t for t in pq_tasks}
 
-    common = sorted(set(df_norm.keys()) & set(lu_norm.keys()))
-    return common, df_norm, lu_norm
+    common = sorted(set(pq_norm.keys()) & set(lu_norm.keys()))
+    return common, pq_norm, lu_norm
 
 def get_metric(data, metric_name, task):
     """Get a metric value, return None if not found"""
@@ -72,25 +72,25 @@ def js_array(values):
     """Convert a Python list to a JSON array string, handling None -> null correctly."""
     return json.dumps(values)
 
-def generate_html(df_data, lu_data, run_id, output_path):
+def generate_html(pq_data, lu_data, run_id, output_path):
     """Generate the comparison HTML with Plotly charts"""
 
-    common, df_norm, lu_norm = build_comparison_data(df_data, lu_data)
+    common, pq_norm, lu_norm = build_comparison_data(pq_data, lu_data)
 
     # Classify queries
     passing_both = []
-    passing_df_only = []
+    passing_pq_only = []
     passing_lu_only = []
     failing_both = []
     for q in common:
-        df_err = get_metric(df_data, 'error rate', df_norm[q])
+        pq_err = get_metric(pq_data, 'error rate', pq_norm[q])
         lu_err = get_metric(lu_data, 'error rate', lu_norm[q])
-        df_pass = (df_err is not None and df_err == 0)
+        pq_pass = (pq_err is not None and pq_err == 0)
         lu_pass = (lu_err is not None and lu_err == 0)
-        if df_pass and lu_pass:
+        if pq_pass and lu_pass:
             passing_both.append(q)
-        elif df_pass:
-            passing_df_only.append(q)
+        elif pq_pass:
+            passing_pq_only.append(q)
         elif lu_pass:
             passing_lu_only.append(q)
         else:
@@ -99,101 +99,101 @@ def generate_html(df_data, lu_data, run_id, output_path):
     # --- Chart 1: P50 Service Time — only queries passing on at least one engine ---
     # Show bars only for the engine that passed. Errored engine gets no bar (null).
     labels_latency = []
-    df_latency = []
+    pq_latency = []
     lu_latency = []
     for q in common:
-        df_err = get_metric(df_data, 'error rate', df_norm[q])
+        pq_err = get_metric(pq_data, 'error rate', pq_norm[q])
         lu_err = get_metric(lu_data, 'error rate', lu_norm[q])
-        df_pass = (df_err is not None and df_err == 0)
+        pq_pass = (pq_err is not None and pq_err == 0)
         lu_pass = (lu_err is not None and lu_err == 0)
-        if not df_pass and not lu_pass:
+        if not pq_pass and not lu_pass:
             continue  # skip queries that fail on both — nothing to show
-        df_val = get_metric(df_data, '50th percentile service time', df_norm[q])
+        pq_val = get_metric(pq_data, '50th percentile service time', pq_norm[q])
         lu_val = get_metric(lu_data, '50th percentile service time', lu_norm[q])
         labels_latency.append(q)
-        df_latency.append(round(df_val, 2) if (df_pass and df_val is not None) else None)
+        pq_latency.append(round(pq_val, 2) if (pq_pass and pq_val is not None) else None)
         lu_latency.append(round(lu_val, 2) if (lu_pass and lu_val is not None) else None)
 
     # --- Chart 2: Error Rate Heatmap ---
     # Binary pass/fail data is best shown as a heatmap — compact and scannable.
-    # Rows = queries (Y-axis), Columns = [DataFusion, Lucene] (X-axis)
+    # Rows = queries (Y-axis), Columns = [Parquet, Lucene] (X-axis)
     # Color: 0 = pass (green), 100 = fail (red)
     heatmap_queries = []
-    heatmap_df_err = []
+    heatmap_pq_err = []
     heatmap_lu_err = []
     for q in common:
-        df_val = get_metric(df_data, 'error rate', df_norm[q])
+        pq_val = get_metric(pq_data, 'error rate', pq_norm[q])
         lu_val = get_metric(lu_data, 'error rate', lu_norm[q])
         heatmap_queries.append(q)
-        heatmap_df_err.append(round(df_val , 1) if df_val is not None else 0)
+        heatmap_pq_err.append(round(pq_val , 1) if pq_val is not None else 0)
         heatmap_lu_err.append(round(lu_val , 1) if lu_val is not None else 0)
-    # Plotly heatmap z is [rows][cols] — each row is a query, cols are [DataFusion, Lucene]
-    heatmap_z = [[d, l] for d, l in zip(heatmap_df_err, heatmap_lu_err)]
+    # Plotly heatmap z is [rows][cols] — each row is a query, cols are [Parquet, Lucene]
+    heatmap_z = [[d, l] for d, l in zip(heatmap_pq_err, heatmap_lu_err)]
     # Custom text for hover
     heatmap_text = [
-        [f"{q}: DataFusion {'PASS' if d == 0 else f'FAIL ({d}%)'}",
+        [f"{q}: Parquet {'PASS' if d == 0 else f'FAIL ({d}%)'}",
          f"{q}: Lucene {'PASS' if l == 0 else f'FAIL ({l}%)'}"]
-        for q, d, l in zip(heatmap_queries, heatmap_df_err, heatmap_lu_err)
+        for q, d, l in zip(heatmap_queries, heatmap_pq_err, heatmap_lu_err)
     ]
 
     # --- Chart 3: Latency Percentiles (p50/p90/p99) for queries passing on both ---
     pct_labels = []
-    df_p50 = []; df_p90 = []; df_p99 = []
+    pq_p50 = []; pq_p90 = []; pq_p99 = []
     lu_p50 = []; lu_p90 = []; lu_p99 = []
     for q in passing_both:
         pct_labels.append(q)
-        df_p50.append(round(get_metric(df_data, '50th percentile service time', df_norm[q]) or 0, 2))
-        df_p90.append(round(get_metric(df_data, '90th percentile service time', df_norm[q]) or 0, 2))
-        df_p99.append(round(get_metric(df_data, '99th percentile service time', df_norm[q]) or 0, 2))
+        pq_p50.append(round(get_metric(pq_data, '50th percentile service time', pq_norm[q]) or 0, 2))
+        pq_p90.append(round(get_metric(pq_data, '90th percentile service time', pq_norm[q]) or 0, 2))
+        pq_p99.append(round(get_metric(pq_data, '99th percentile service time', pq_norm[q]) or 0, 2))
         lu_p50.append(round(get_metric(lu_data, '50th percentile service time', lu_norm[q]) or 0, 2))
         lu_p90.append(round(get_metric(lu_data, '90th percentile service time', lu_norm[q]) or 0, 2))
         lu_p99.append(round(get_metric(lu_data, '99th percentile service time', lu_norm[q]) or 0, 2))
 
-    # --- Chart 4: Scatter — DataFusion vs Lucene p50 latency ---
-    # Each dot is a query. X = Lucene p50, Y = DataFusion p50.
-    # Dots above the diagonal = DataFusion slower. Dots below = DataFusion faster.
+    # --- Chart 4: Scatter — Parquet vs Lucene p50 latency ---
+    # Each dot is a query. X = Lucene p50, Y = Parquet p50.
+    # Dots above the diagonal = Parquet slower. Dots below = Parquet faster.
     scatter_lu = []
-    scatter_df = []
+    scatter_pq = []
     scatter_labels = []
     for q in passing_both:
-        df_val = get_metric(df_data, '50th percentile service time', df_norm[q])
+        pq_val = get_metric(pq_data, '50th percentile service time', pq_norm[q])
         lu_val = get_metric(lu_data, '50th percentile service time', lu_norm[q])
-        if df_val is not None and lu_val is not None:
+        if pq_val is not None and lu_val is not None:
             scatter_lu.append(round(lu_val, 2))
-            scatter_df.append(round(df_val, 2))
+            scatter_pq.append(round(pq_val, 2))
             scatter_labels.append(q)
 
     # --- Chart 5: Mean Throughput (achieved ops/s) for queries passing on both ---
     tp_labels = []
-    df_tp = []
+    pq_tp = []
     lu_tp = []
     for q in passing_both:
-        df_val = get_metric(df_data, 'Mean Throughput', df_norm[q])
+        pq_val = get_metric(pq_data, 'Mean Throughput', pq_norm[q])
         lu_val = get_metric(lu_data, 'Mean Throughput', lu_norm[q])
-        if df_val is not None or lu_val is not None:
+        if pq_val is not None or lu_val is not None:
             tp_labels.append(q)
-            df_tp.append(round(df_val, 2) if df_val is not None else 0)
+            pq_tp.append(round(pq_val, 2) if pq_val is not None else 0)
             lu_tp.append(round(lu_val, 2) if lu_val is not None else 0)
 
     # --- Summary stats ---
-    df_passing = len(passing_both) + len(passing_df_only)
+    pq_passing = len(passing_both) + len(passing_pq_only)
     lu_passing = len(passing_both) + len(passing_lu_only)
 
     # Avg latency ratio: only for queries passing on both
     ratios = []
     for q in passing_both:
-        df_val = get_metric(df_data, '50th percentile service time', df_norm[q])
+        pq_val = get_metric(pq_data, '50th percentile service time', pq_norm[q])
         lu_val = get_metric(lu_data, '50th percentile service time', lu_norm[q])
-        if df_val and lu_val and lu_val > 0:
-            ratios.append(df_val / lu_val)
+        if pq_val and lu_val and lu_val > 0:
+            ratios.append(pq_val / lu_val)
     avg_ratio = sum(ratios) / len(ratios) if ratios else 0
     ratio_label = f"{avg_ratio:.1f}x" if avg_ratio > 0 else "N/A"
-    ratio_note = "(DataFusion / Lucene p50 service time)" if avg_ratio > 0 else ""
+    ratio_note = "(Parquet / Lucene p50 service time)" if avg_ratio > 0 else ""
 
     # Median latency for each engine (passing-on-both queries only)
-    df_medians = sorted([get_metric(df_data, '50th percentile service time', df_norm[q]) or 0 for q in passing_both])
+    pq_medians = sorted([get_metric(pq_data, '50th percentile service time', pq_norm[q]) or 0 for q in passing_both])
     lu_medians = sorted([get_metric(lu_data, '50th percentile service time', lu_norm[q]) or 0 for q in passing_both])
-    df_median_of_medians = df_medians[len(df_medians)//2] if df_medians else 0
+    pq_median_of_medians = pq_medians[len(pq_medians)//2] if pq_medians else 0
     lu_median_of_medians = lu_medians[len(lu_medians)//2] if lu_medians else 0
 
     # --- Generate HTML ---
@@ -218,13 +218,13 @@ def generate_html(df_data, lu_data, run_id, output_path):
 </style>
 </head>
 <body>
-<h1>DataFusion vs Lucene — Benchmark Comparison</h1>
+<h1>Parquet vs Lucene — Benchmark Comparison</h1>
 <p class="subtitle">Run ID: {run_id} | Common queries: {len(common)} | Passing on both: {len(passing_both)}</p>
 
 <div class="summary">
   <div class="card">
-    <h3>DataFusion Queries</h3>
-    <div class="value">{df_passing} / {len(common)} pass</div>
+    <h3>Parquet Queries</h3>
+    <div class="value">{pq_passing} / {len(common)} pass</div>
   </div>
   <div class="card">
     <h3>Lucene Queries</h3>
@@ -237,7 +237,7 @@ def generate_html(df_data, lu_data, run_id, output_path):
   </div>
   <div class="card">
     <h3>Median p50 Service Time</h3>
-    <div class="value">DF: {df_median_of_medians:.1f}ms / LU: {lu_median_of_medians:.1f}ms</div>
+    <div class="value">PQ: {pq_median_of_medians:.1f}ms / LU: {lu_median_of_medians:.1f}ms</div>
     <div class="note">(queries passing on both)</div>
   </div>
 </div>
@@ -248,7 +248,7 @@ def generate_html(df_data, lu_data, run_id, output_path):
   Missing bars mean that engine errored on that query.
   Chart 2 is a pass/fail heatmap — green = 0% errors, red = 100% errors. Scan vertically to see which queries each engine handles.
   Chart 3 shows p50/p90/p99 service time per engine for queries passing on both. Darker = lower percentile.
-  Chart 4 is a scatter plot: each dot is a query, X = Lucene latency, Y = DataFusion latency. Dots above the diagonal line mean DataFusion is slower.
+  Chart 4 is a scatter plot: each dot is a query, X = Lucene latency, Y = Parquet latency. Dots above the diagonal line mean Parquet is slower.
   Chart 5 shows mean throughput (achieved ops/s) per query — higher is better.
 </div>
 
@@ -261,9 +261,9 @@ def generate_html(df_data, lu_data, run_id, output_path):
 <script>
 // Chart 1: P50 Service Time (only passing queries get bars)
 Plotly.newPlot('chart1', [
-  {{name: 'DataFusion', x: {js_array(labels_latency)}, y: {js_array(df_latency)}, type: 'bar',
+  {{name: 'Parquet', x: {js_array(labels_latency)}, y: {js_array(pq_latency)}, type: 'bar',
     marker: {{color: '#FF6B35'}},
-    hovertemplate: '%{{x}}<br>DataFusion: %{{y:.2f}} ms<extra></extra>'}},
+    hovertemplate: '%{{x}}<br>Parquet: %{{y:.2f}} ms<extra></extra>'}},
   {{name: 'Lucene', x: {js_array(labels_latency)}, y: {js_array(lu_latency)}, type: 'bar',
     marker: {{color: '#004E89'}},
     hovertemplate: '%{{x}}<br>Lucene: %{{y:.2f}} ms<extra></extra>'}}
@@ -276,7 +276,7 @@ Plotly.newPlot('chart1', [
 // Chart 2: Error Rate Heatmap (pass/fail grid)
 Plotly.newPlot('chart2', [{{
   z: {js_array(heatmap_z)},
-  x: ['DataFusion', 'Lucene'],
+  x: ['Parquet', 'Lucene'],
   y: {js_array(heatmap_queries)},
   text: {js_array(heatmap_text)},
   hovertemplate: '%{{text}}<extra></extra>',
@@ -294,11 +294,11 @@ Plotly.newPlot('chart2', [{{
 
 // Chart 3: Latency Percentiles (p50/p90/p99) — queries passing on both
 Plotly.newPlot('chart3', [
-  {{name: 'DataFusion p50', x: {js_array(pct_labels)}, y: {js_array(df_p50)}, type: 'bar',
+  {{name: 'Parquet p50', x: {js_array(pct_labels)}, y: {js_array(pq_p50)}, type: 'bar',
     marker: {{color: 'rgba(255,107,53,1.0)'}}, legendgroup: 'df'}},
-  {{name: 'DataFusion p90', x: {js_array(pct_labels)}, y: {js_array(df_p90)}, type: 'bar',
+  {{name: 'Parquet p90', x: {js_array(pct_labels)}, y: {js_array(pq_p90)}, type: 'bar',
     marker: {{color: 'rgba(255,107,53,0.6)'}}, legendgroup: 'df'}},
-  {{name: 'DataFusion p99', x: {js_array(pct_labels)}, y: {js_array(df_p99)}, type: 'bar',
+  {{name: 'Parquet p99', x: {js_array(pct_labels)}, y: {js_array(pq_p99)}, type: 'bar',
     marker: {{color: 'rgba(255,107,53,0.3)'}}, legendgroup: 'df'}},
   {{name: 'Lucene p50', x: {js_array(pct_labels)}, y: {js_array(lu_p50)}, type: 'bar',
     marker: {{color: 'rgba(0,78,137,1.0)'}}, legendgroup: 'lu'}},
@@ -312,19 +312,19 @@ Plotly.newPlot('chart3', [
   height: 550, margin: {{b: 150}}
 }});
 
-// Chart 4: Scatter — DataFusion vs Lucene p50 latency
-var maxVal = Math.max(...{js_array(scatter_df)}, ...{js_array(scatter_lu)}) * 1.1;
+// Chart 4: Scatter — Parquet vs Lucene p50 latency
+var maxVal = Math.max(...{js_array(scatter_pq)}, ...{js_array(scatter_lu)}) * 1.1;
 Plotly.newPlot('chart4', [
-  {{name: 'Queries', x: {js_array(scatter_lu)}, y: {js_array(scatter_df)},
+  {{name: 'Queries', x: {js_array(scatter_lu)}, y: {js_array(scatter_pq)},
     text: {js_array(scatter_labels)}, mode: 'markers+text', type: 'scatter',
     textposition: 'top right', textfont: {{size: 9, color: '#666'}},
     marker: {{size: 10, color: '#FF6B35', line: {{width: 1, color: '#004E89'}}}},
-    hovertemplate: '%{{text}}<br>Lucene: %{{x:.2f}}ms<br>DataFusion: %{{y:.2f}}ms<extra></extra>'
+    hovertemplate: '%{{text}}<br>Lucene: %{{x:.2f}}ms<br>Parquet: %{{y:.2f}}ms<extra></extra>'
   }}
 ], {{
-  title: 'DataFusion vs Lucene — P50 Service Time Scatter<br><sub>Above diagonal = DataFusion slower | Below = DataFusion faster | On line = equal</sub>',
+  title: 'Parquet vs Lucene — P50 Service Time Scatter<br><sub>Above diagonal = Parquet slower | Below = Parquet faster | On line = equal</sub>',
   xaxis: {{title: 'Lucene p50 (ms)', range: [0, maxVal]}},
-  yaxis: {{title: 'DataFusion p50 (ms)', range: [0, maxVal]}},
+  yaxis: {{title: 'Parquet p50 (ms)', range: [0, maxVal]}},
   shapes: [{{type: 'line', x0: 0, y0: 0, x1: maxVal, y1: maxVal,
     line: {{color: '#333', width: 1, dash: 'dash'}}}}],
   height: 550, margin: {{l: 80, r: 30, t: 80, b: 80}},
@@ -333,9 +333,9 @@ Plotly.newPlot('chart4', [
 
 // Chart 5: 100th Percentile Throughput (achieved ops/s)
 Plotly.newPlot('chart5', [
-  {{name: 'DataFusion', x: {js_array(tp_labels)}, y: {js_array(df_tp)}, type: 'bar',
+  {{name: 'Parquet', x: {js_array(tp_labels)}, y: {js_array(pq_tp)}, type: 'bar',
     marker: {{color: '#FF6B35'}},
-    hovertemplate: '%{{x}}<br>DataFusion: %{{y:.2f}} ops/s<extra></extra>'}},
+    hovertemplate: '%{{x}}<br>Parquet: %{{y:.2f}} ops/s<extra></extra>'}},
   {{name: 'Lucene', x: {js_array(tp_labels)}, y: {js_array(lu_tp)}, type: 'bar',
     marker: {{color: '#004E89'}},
     hovertemplate: '%{{x}}<br>Lucene: %{{y:.2f}} ops/s<extra></extra>'}}
@@ -354,26 +354,26 @@ Plotly.newPlot('chart5', [
 
 def main():
     parser = argparse.ArgumentParser(description='Generate benchmark comparison HTML')
-    parser.add_argument('--datafusion-csv', required=True, help='Path to DataFusion benchmark CSV')
+    parser.add_argument('--parquet-csv', required=True, help='Path to Parquet benchmark CSV')
     parser.add_argument('--lucene-csv', required=True, help='Path to Lucene benchmark CSV')
     parser.add_argument('--output', default='benchmark-comparison.html', help='Output HTML path')
     parser.add_argument('--run-id', default='unknown', help='Run ID for the title')
     args = parser.parse_args()
 
-    if not os.path.exists(args.datafusion_csv):
-        print(f"Error: DataFusion CSV not found: {args.datafusion_csv}")
+    if not os.path.exists(args.parquet_csv):
+        print(f"Error: Parquet CSV not found: {args.parquet_csv}")
         sys.exit(1)
     if not os.path.exists(args.lucene_csv):
         print(f"Error: Lucene CSV not found: {args.lucene_csv}")
         sys.exit(1)
 
-    df_data = parse_csv(args.datafusion_csv)
+    pq_data = parse_csv(args.parquet_csv)
     lu_data = parse_csv(args.lucene_csv)
 
-    print(f"DataFusion: {len(df_data)} metrics loaded")
+    print(f"Parquet: {len(pq_data)} metrics loaded")
     print(f"Lucene: {len(lu_data)} metrics loaded")
 
-    generate_html(df_data, lu_data, args.run_id, args.output)
+    generate_html(pq_data, lu_data, args.run_id, args.output)
 
 if __name__ == '__main__':
     main()

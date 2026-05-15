@@ -23,14 +23,14 @@ interface OpenSearchCodeGuruStackProps extends cdk.StackProps {
   ebsIops: number;
   ebsThroughput: number;
   jvmHeap: string;
-  datafusionJvmHeap?: string;
+  parquetJvmHeap?: string;
   benchmarkEnabled: boolean;
   benchmarkInstanceType: string;
   benchmarkEbsSizeGb: number;
   benchmarkEbsIops: number;
   benchmarkEbsThroughput: number;
-  datafusionWorkloadRepo: string;
-  datafusionWorkloadBranch: string;
+  parquetWorkloadRepo: string;
+  parquetWorkloadBranch: string;
   luceneWorkloadRepo: string;
   luceneWorkloadBranch: string;
   testIterations: number;
@@ -38,6 +38,9 @@ interface OpenSearchCodeGuruStackProps extends cdk.StackProps {
   luceneEnabled: boolean;
   luceneRepo: string;
   luceneBranch: string;
+  parquetLuceneEnabled: boolean;
+  parquetLuceneWorkloadRepo: string;
+  parquetLuceneWorkloadBranch: string;
   clusterMode: string;
   dataNodeCount: number;
   metricsStoreHost: string;
@@ -55,14 +58,15 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
       s3ProfileBucket, instanceType, ebsSizeGb, ebsIops,
       ebsThroughput, jvmHeap, benchmarkEnabled, benchmarkInstanceType, benchmarkEbsSizeGb,
       benchmarkEbsIops, benchmarkEbsThroughput,
-      datafusionWorkloadRepo, datafusionWorkloadBranch, luceneWorkloadRepo, luceneWorkloadBranch,
+      parquetWorkloadRepo, parquetWorkloadBranch, luceneWorkloadRepo, luceneWorkloadBranch,
       testIterations, ingestPercentage, luceneEnabled, luceneRepo, luceneBranch,
+      parquetLuceneEnabled, parquetLuceneWorkloadRepo, parquetLuceneWorkloadBranch,
       clusterMode, dataNodeCount, metricsStoreHost, metricsStorePort, metricsStoreSecure, runId, runIdPrefix } = props;
 
-    const datafusionJvmHeap = props.datafusionJvmHeap || jvmHeap;
+    const parquetJvmHeap = props.parquetJvmHeap || jvmHeap;
 
     const isMultiNode = clusterMode === "multi";
-    const clusterTag = `${id}-datafusion-cluster`;
+    const clusterTag = `${id}-parquet-cluster`;
     // Log group prefix: "/opensearch" for normal, "/opensearch/nightly" for nightly
     const logGroupPrefix = runIdPrefix ? `/opensearch/${runIdPrefix}` : "/opensearch";
 
@@ -135,11 +139,11 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
       return inst;
     };
 
-    // --- Helper: create a DataFusion instance with cluster config ---
-    const createDataFusionInstance = (nodeId: string, ltId: string, nodeName: string, nodeRoles: string): ec2.Instance => {
-      const script = fs.readFileSync(path.join(__dirname, "..", "scripts", "user-data-datafusion.sh"), "utf-8")
+    // --- Helper: create a Parquet instance with cluster config ---
+    const createParquetInstance = (nodeId: string, ltId: string, nodeName: string, nodeRoles: string): ec2.Instance => {
+      const script = fs.readFileSync(path.join(__dirname, "..", "scripts", "user-data-parquet.sh"), "utf-8")
         .replace(/\{\{S3_PROFILE_BUCKET\}\}/g, s3ProfileBucket)
-        .replace(/\{\{JVM_HEAP\}\}/g, datafusionJvmHeap)
+        .replace(/\{\{JVM_HEAP\}\}/g, parquetJvmHeap)
         .replace(/\{\{SCRIPTS_S3_PATH\}\}/g, scriptsS3Path)
         .replace(/\{\{CLUSTER_MODE\}\}/g, clusterMode)
         .replace(/\{\{CLUSTER_TAG\}\}/g, clusterTag)
@@ -150,7 +154,7 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
         .replace(/\{\{LOG_GROUP_PREFIX\}\}/g, logGroupPrefix);
 
       const inst = createInstance(nodeId, ltId, script, instanceType, ebsSizeGb, ebsIops, ebsThroughput);
-      const nameTag = nodeName ? `${id}-DataFusion-${runId}-${nodeName}` : `${id}-DataFusion-${runId}`;
+      const nameTag = nodeName ? `${id}-Parquet-${runId}-${nodeName}` : `${id}-Parquet-${runId}`;
       cdk.Tags.of(inst).add("Name", nameTag);
 
       if (isMultiNode) {
@@ -161,11 +165,11 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
     };
 
     // =========================================================================
-    // Builder Instance — builds both DataFusion and Lucene, uploads tar.gz to S3
+    // Builder Instance — builds both Parquet and Lucene, uploads tar.gz to S3
     // =========================================================================
     const builderScript = fs.readFileSync(path.join(__dirname, "..", "scripts", "user-data-builder.sh"), "utf-8")
-      .replace(/\{\{DATAFUSION_BRANCH\}\}/g, branch)
-      .replace(/\{\{DATAFUSION_REPO\}\}/g, opensearchRepo)
+      .replace(/\{\{PARQUET_BRANCH\}\}/g, branch)
+      .replace(/\{\{PARQUET_REPO\}\}/g, opensearchRepo)
       .replace(/\{\{LUCENE_BRANCH\}\}/g, luceneBranch)
       .replace(/\{\{LUCENE_REPO\}\}/g, luceneRepo)
       .replace(/\{\{S3_PROFILE_BUCKET\}\}/g, s3ProfileBucket)
@@ -179,25 +183,25 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
     new cdk.CfnOutput(this, "A2_BuilderLog", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${builderInstance.instancePublicDnsName} "tail -f /var/log/user-data.log"` });
 
     // =========================================================================
-    // DataFusion OpenSearch: single-node or multi-node cluster
+    // Parquet OpenSearch: single-node or multi-node cluster
     // =========================================================================
-    let datafusionEndpoint: string;
-    let datafusionInstanceId: string = "";
+    let parquetEndpoint: string;
+    let parquetInstanceId: string = "";
 
     if (isMultiNode) {
       // --- Multi-node: 3 managers + N data nodes + internal ALB ---
-      const seedManager = createDataFusionInstance("SeedManager", "SeedManagerLt", "clusterManager-seed", "cluster_manager");
+      const seedManager = createParquetInstance("SeedManager", "SeedManagerLt", "clusterManager-seed", "cluster_manager");
       new cdk.CfnOutput(this, "B1_SeedManagerSSH", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${seedManager.instancePublicDnsName}` });
 
       for (let i = 2; i <= 3; i++) {
-        createDataFusionInstance(`Manager${i}`, `Manager${i}Lt`, `clusterManager-${i}`, "cluster_manager");
+        createParquetInstance(`Manager${i}`, `Manager${i}Lt`, `clusterManager-${i}`, "cluster_manager");
       }
 
       const dataInstances: ec2.Instance[] = [];
       for (let i = 1; i <= dataNodeCount; i++) {
-        const data = createDataFusionInstance(`DataNode${i}`, `DataNode${i}Lt`, `dataNode-${i}`, "data, ingest");
+        const data = createParquetInstance(`DataNode${i}`, `DataNode${i}Lt`, `dataNode-${i}`, "data, ingest");
         dataInstances.push(data);
-        if (i === 1) datafusionInstanceId = data.instanceId;  // Use first data node for CloudWatch dashboard
+        if (i === 1) parquetInstanceId = data.instanceId;  // Use first data node for CloudWatch dashboard
         new cdk.CfnOutput(this, `B2DataNode${i}SSH`, { value: `ssh -i ~/${keyPairName}.pem ec2-user@${data.instancePublicDnsName}` });
       }
 
@@ -221,21 +225,21 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
         },
       });
 
-      datafusionEndpoint = alb.loadBalancerDnsName;
+      parquetEndpoint = alb.loadBalancerDnsName;
 
       new cdk.CfnOutput(this, "B3_ClusterALBUrl", { value: `http://${alb.loadBalancerDnsName}:9200` });
       new cdk.CfnOutput(this, "B4_ClusterMode", { value: `multi (3 managers + ${dataNodeCount} data nodes)` });
 
     } else {
       // --- Single-node (default) ---
-      const instance = createDataFusionInstance("DataFusionInstance", "DataFusionLt", "node", "");
-      datafusionEndpoint = instance.instancePrivateIp;
-      datafusionInstanceId = instance.instanceId;
+      const instance = createParquetInstance("ParquetInstance", "ParquetLt", "node", "");
+      parquetEndpoint = instance.instancePrivateIp;
+      parquetInstanceId = instance.instanceId;
 
-      new cdk.CfnOutput(this, "B1_DataFusionSSH", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${instance.instancePublicDnsName}` });
-      new cdk.CfnOutput(this, "B2_DataFusionSetupLog", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${instance.instancePublicDnsName} "tail -f /var/log/user-data.log"` });
-      new cdk.CfnOutput(this, "B3_DataFusionRuntimeLog", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${instance.instancePublicDnsName} "tail -f ~/datafusion-opensearch-run.log"` });
-      new cdk.CfnOutput(this, "B4_DataFusionPrivateIp", { value: instance.instancePrivateIp });
+      new cdk.CfnOutput(this, "B1_ParquetSSH", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${instance.instancePublicDnsName}` });
+      new cdk.CfnOutput(this, "B2_ParquetSetupLog", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${instance.instancePublicDnsName} "tail -f /var/log/user-data.log"` });
+      new cdk.CfnOutput(this, "B3_ParquetRuntimeLog", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${instance.instancePublicDnsName} "tail -f ~/parquet-opensearch-run.log"` });
+      new cdk.CfnOutput(this, "B4_ParquetPrivateIp", { value: instance.instancePrivateIp });
     }
 
     // =========================================================================
@@ -326,15 +330,49 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
     }
 
     // =========================================================================
+    // ParquetLucene OpenSearch: same binary as Parquet, different workload (indexed_parquet)
+    // =========================================================================
+    let parquetLuceneEndpoint = "";
+    let parquetLuceneInstanceId: string = "";
+    if (parquetLuceneEnabled) {
+      const createParquetLuceneInstance = (nodeId: string, ltId: string, nodeName: string, nodeRoles: string): ec2.Instance => {
+        const script = fs.readFileSync(path.join(__dirname, "..", "scripts", "user-data-parquetLucene.sh"), "utf-8")
+          .replace(/\{\{S3_PROFILE_BUCKET\}\}/g, s3ProfileBucket)
+          .replace(/\{\{JVM_HEAP\}\}/g, parquetJvmHeap)
+          .replace(/\{\{SCRIPTS_S3_PATH\}\}/g, scriptsS3Path)
+          .replace(/\{\{CLUSTER_MODE\}\}/g, clusterMode)
+          .replace(/\{\{CLUSTER_TAG\}\}/g, `${id}-parquetLucene-cluster`)
+          .replace(/\{\{NODE_NAME\}\}/g, nodeName)
+          .replace(/\{\{NODE_ROLES\}\}/g, nodeRoles)
+          .replace(/\{\{BENCHMARK_ENABLED\}\}/g, String(benchmarkEnabled))
+          .replace(/\{\{RUN_ID\}\}/g, runId)
+          .replace(/\{\{LOG_GROUP_PREFIX\}\}/g, logGroupPrefix);
+
+        const inst = createInstance(nodeId, ltId, script, instanceType, ebsSizeGb, ebsIops, ebsThroughput);
+        cdk.Tags.of(inst).add("Name", `${id}-ParquetLucene-${runId}-${nodeName}`);
+        return inst;
+      };
+
+      const parquetLuceneInstance = createParquetLuceneInstance("ParquetLuceneInstance", "ParquetLuceneLt", "node", "");
+      parquetLuceneEndpoint = parquetLuceneInstance.instancePrivateIp;
+      parquetLuceneInstanceId = parquetLuceneInstance.instanceId;
+
+      new cdk.CfnOutput(this, "D1_ParquetLuceneSSH", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${parquetLuceneInstance.instancePublicDnsName}` });
+      new cdk.CfnOutput(this, "D2_ParquetLuceneSetupLog", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${parquetLuceneInstance.instancePublicDnsName} "tail -f /var/log/user-data.log"` });
+      new cdk.CfnOutput(this, "D3_ParquetLuceneRuntimeLog", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${parquetLuceneInstance.instancePublicDnsName} "tail -f ~/parquetLucene-opensearch-run.log"` });
+      new cdk.CfnOutput(this, "D4_ParquetLucenePrivateIp", { value: parquetLuceneInstance.instancePrivateIp });
+    }
+
+    // =========================================================================
     // Benchmark Instance (optional) — runs OSB + correctness tests
     // =========================================================================
     if (benchmarkEnabled) {
       const benchmarkScript = fs.readFileSync(path.join(__dirname, "..", "scripts", "user-data-benchmark.sh"), "utf-8")
-        .replace(/\{\{DATAFUSION_WORKLOAD_REPO\}\}/g, datafusionWorkloadRepo)
-        .replace(/\{\{DATAFUSION_WORKLOAD_BRANCH\}\}/g, datafusionWorkloadBranch)
+        .replace(/\{\{PARQUET_WORKLOAD_REPO\}\}/g, parquetWorkloadRepo)
+        .replace(/\{\{PARQUET_WORKLOAD_BRANCH\}\}/g, parquetWorkloadBranch)
         .replace(/\{\{LUCENE_WORKLOAD_REPO\}\}/g, luceneWorkloadRepo)
         .replace(/\{\{LUCENE_WORKLOAD_BRANCH\}\}/g, luceneWorkloadBranch)
-        .replace(/\{\{DATAFUSION_PRIVATE_IP\}\}/g, datafusionEndpoint)
+        .replace(/\{\{PARQUET_PRIVATE_IP\}\}/g, parquetEndpoint)
         .replace(/\{\{LUCENE_PRIVATE_IP\}\}/g, luceneEndpoint)
         .replace(/\{\{S3_PROFILE_BUCKET\}\}/g, s3ProfileBucket)
         .replace(/\{\{SCRIPTS_S3_PATH\}\}/g, scriptsS3Path)
@@ -364,12 +402,12 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
     }
 
     // =========================================================================
-    // CloudWatch Dashboard — side-by-side DataFusion vs Lucene system metrics
+    // CloudWatch Dashboard — side-by-side Parquet vs Lucene system metrics
     // =========================================================================
     const metricsNamespace = `OpenSearch/${runId}`;
 
     // Use instance IDs to identify engines (EngineRole custom dimension is not supported by CW agent)
-    const dfInstanceId = datafusionInstanceId;
+    const pqInstanceId = parquetInstanceId;
     const luInstanceId = luceneInstanceId;
 
     const cwMetric = (metricName: string, instanceId: string, extraDims?: Record<string, string>): cw.Metric =>
@@ -380,7 +418,7 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
       });
 
     const sideBySide = (title: string, metricName: string, yLabel: string, extraDims?: Record<string, string>): cw.GraphWidget => {
-      const left = [cwMetric(metricName, dfInstanceId, extraDims).with({ label: "DataFusion", color: "#FF6B35" })];
+      const left = [cwMetric(metricName, pqInstanceId, extraDims).with({ label: "Parquet", color: "#FF6B35" })];
       const right = luInstanceId ? [cwMetric(metricName, luInstanceId, extraDims).with({ label: "Lucene", color: "#004E89" })] : [];
       return new cw.GraphWidget({
         title, width: 24, height: 6, left, right,
@@ -394,7 +432,7 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
 
     dashboard.addWidgets(
       new cw.TextWidget({
-        markdown: `# DataFusion vs Lucene — ${runId}\nNamespace: \`${metricsNamespace}\`\n\nNote: Graphs use InstanceId to distinguish engines. If graphs are empty, the instances may still be starting up. Check back in 30-40 minutes after deploy.`,
+        markdown: `# Parquet vs Lucene — ${runId}\nNamespace: \`${metricsNamespace}\`\n\nNote: Graphs use InstanceId to distinguish engines. If graphs are empty, the instances may still be starting up. Check back in 30-40 minutes after deploy.`,
         width: 24, height: 2,
       }),
     );
@@ -419,9 +457,9 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
       });
 
     dashboard.addWidgets(
-      vmstatWidget("DataFusion — Free Memory (KB)", `${logGroupPrefix}/datafusion/vmstat`, "free"),
-      vmstatWidget("DataFusion — Buffer (KB)", `${logGroupPrefix}/datafusion/vmstat`, "buff"),
-      vmstatWidget("DataFusion — Cache (KB)", `${logGroupPrefix}/datafusion/vmstat`, "cache"),
+      vmstatWidget("Parquet — Free Memory (KB)", `${logGroupPrefix}/parquet/vmstat`, "free"),
+      vmstatWidget("Parquet — Buffer (KB)", `${logGroupPrefix}/parquet/vmstat`, "buff"),
+      vmstatWidget("Parquet — Cache (KB)", `${logGroupPrefix}/parquet/vmstat`, "cache"),
     );
     dashboard.addWidgets(
       vmstatWidget("Lucene — Free Memory (KB)", `${logGroupPrefix}/lucene/vmstat`, "free"),

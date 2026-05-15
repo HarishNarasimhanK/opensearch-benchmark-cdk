@@ -30,21 +30,26 @@ const securityGroupId = process.env.SECURITY_GROUP_ID;
 const s3ProfileBucket = app.node.tryGetContext("s3Bucket") || process.env.S3_BUCKET || "opensearch-codeguru";
 
 // --- Instance config ---
-const instanceType = process.env.INSTANCE_TYPE || "r7g.2xlarge";
+const instanceType = process.env.INSTANCE_TYPE || "r8g.2xlarge";
 const ebsSizeGb = parseInt(process.env.EBS_SIZE_GB || "1000", 10);
 const ebsIops = parseInt(process.env.EBS_IOPS || "12000", 10);
 const ebsThroughput = parseInt(process.env.EBS_THROUGHPUT || "500", 10);
 const jvmHeap = process.env.JVM_HEAP || "32g";
-const datafusionJvmHeap = "16g";
+const parquetJvmHeap = "16g";
 
-// --- DataFusion OpenSearch config (upstream main) ---
-const branch = app.node.tryGetContext("datafusionBranch") || process.env.DATAFUSION_BRANCH || "main";
-const opensearchRepo = app.node.tryGetContext("datafusionRepo") || process.env.DATAFUSION_REPO || "https://github.com/opensearch-project/OpenSearch.git";
+// --- Parquet OpenSearch config (upstream main) ---
+const branch = app.node.tryGetContext("parquetBranch") || process.env.PARQUET_BRANCH || "main";
+const opensearchRepo = app.node.tryGetContext("parquetRepo") || process.env.PARQUET_REPO || "https://github.com/opensearch-project/OpenSearch.git";
 
 // --- Lucene OpenSearch config (no plugins — DSL queries only) ---
 const luceneEnabled = (process.env.LUCENE_ENABLED || "true").toLowerCase() === "true";
 const luceneRepo = app.node.tryGetContext("luceneRepo") || process.env.LUCENE_REPO || "https://github.com/opensearch-project/OpenSearch.git";
 const luceneBranch = app.node.tryGetContext("luceneBranch") || process.env.LUCENE_BRANCH || "main";
+
+// --- ParquetLucene config (same binary as Parquet, different workload) ---
+const parquetLuceneEnabled = (app.node.tryGetContext("parquetLuceneEnabled") || process.env.PARQUET_LUCENE_ENABLED || "true").toLowerCase() === "true";
+const parquetLuceneWorkloadRepo = app.node.tryGetContext("parquetLuceneWorkloadRepo") || process.env.PARQUET_LUCENE_WORKLOAD_REPO || "https://github.com/HarishNarasimhanK/opensearch-benchmark-workloads.git";
+const parquetLuceneWorkloadBranch = app.node.tryGetContext("parquetLuceneWorkloadBranch") || process.env.PARQUET_LUCENE_WORKLOAD_BRANCH || "indexed_parquet";
 
 // --- Cluster config ---
 const clusterMode = app.node.tryGetContext("clusterMode") || process.env.CLUSTER_MODE || "single";
@@ -56,8 +61,8 @@ const benchmarkInstanceType = process.env.BENCHMARK_INSTANCE_TYPE || "m7g.medium
 const benchmarkEbsSizeGb = parseInt(process.env.BENCHMARK_EBS_SIZE_GB || "500", 10);
 const benchmarkEbsIops = parseInt(process.env.BENCHMARK_EBS_IOPS || "10000", 10);
 const benchmarkEbsThroughput = parseInt(process.env.BENCHMARK_EBS_THROUGHPUT || "500", 10);
-const datafusionWorkloadRepo = app.node.tryGetContext("datafusionWorkloadRepo") || process.env.DATAFUSION_WORKLOAD_REPO || "https://github.com/HarishNarasimhanK/opensearch-benchmark-workloads.git";
-const datafusionWorkloadBranch = app.node.tryGetContext("datafusionWorkloadBranch") || process.env.DATAFUSION_WORKLOAD_BRANCH || "nightly";
+const parquetWorkloadRepo = app.node.tryGetContext("parquetWorkloadRepo") || process.env.PARQUET_WORKLOAD_REPO || "https://github.com/HarishNarasimhanK/opensearch-benchmark-workloads.git";
+const parquetWorkloadBranch = app.node.tryGetContext("parquetWorkloadBranch") || process.env.PARQUET_WORKLOAD_BRANCH || "nightly";
 const luceneWorkloadRepo = app.node.tryGetContext("luceneWorkloadRepo") || process.env.LUCENE_WORKLOAD_REPO || "https://github.com/opensearch-project/opensearch-benchmark-workloads.git";
 const luceneWorkloadBranch = app.node.tryGetContext("luceneWorkloadBranch") || process.env.LUCENE_WORKLOAD_BRANCH || "main";
 const testIterations = parseInt(app.node.tryGetContext("testIterations") || process.env.TEST_ITERATIONS || "100", 10);
@@ -99,14 +104,14 @@ new OpenSearchCodeGuruStack(app, stackName, {
   ebsIops,
   ebsThroughput,
   jvmHeap,
-  datafusionJvmHeap,
+  parquetJvmHeap,
   benchmarkEnabled,
   benchmarkInstanceType,
   benchmarkEbsSizeGb,
   benchmarkEbsIops,
   benchmarkEbsThroughput,
-  datafusionWorkloadRepo,
-  datafusionWorkloadBranch,
+  parquetWorkloadRepo,
+  parquetWorkloadBranch,
   luceneWorkloadRepo,
   luceneWorkloadBranch,
   testIterations,
@@ -114,6 +119,9 @@ new OpenSearchCodeGuruStack(app, stackName, {
   luceneEnabled,
   luceneRepo,
   luceneBranch,
+  parquetLuceneEnabled,
+  parquetLuceneWorkloadRepo,
+  parquetLuceneWorkloadBranch,
   clusterMode,
   dataNodeCount,
   metricsStoreHost,

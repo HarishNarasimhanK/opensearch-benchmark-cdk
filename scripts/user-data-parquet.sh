@@ -3,14 +3,14 @@ set -exo pipefail
 exec > /var/log/user-data.log 2>&1
 
 # =============================================================================
-# user-data-datafusion.sh — Downloads pre-built DataFusion OpenSearch from S3,
+# user-data-parquet.sh — Downloads pre-built Parquet OpenSearch from S3,
 # configures it, and starts it with the sandbox feature flags.
 #
 # The tar.gz already contains:
 #   - OpenSearch distribution (localDistro)
-#   - 8 plugins (arrow-flight-rpc, analytics-engine, parquet-data-format,
+#   - 9 plugins (arrow-flight-rpc, analytics-engine, parquet-data-format,
 #     analytics-backend-datafusion, analytics-backend-lucene,
-#     dsl-query-executor, composite-engine, test-ppl-frontend)
+#     dsl-query-executor, composite-engine, opensearch-job-scheduler, opensearch-sql)
 #   - libopensearch_native.so in lib/
 #   - discovery-ec2 plugin (for multi-node)
 #
@@ -27,7 +27,7 @@ echo "$INSTANCE_ID" > /home/ec2-user/.instance-id
 chown ec2-user:ec2-user /home/ec2-user/.instance-id
 echo "Instance ID: $INSTANCE_ID"
 
-# JDK 25 required for sandbox DataFusion (JDK 21 is not sufficient)
+# JDK 25 required for sandbox Parquet (JDK 21 is not sufficient)
 echo "=== Installing JDK 25 (Corretto) ==="
 su -l ec2-user -c 'wget -q "https://corretto.aws/downloads/resources/25.0.3.9.1/amazon-corretto-25.0.3.9.1-linux-aarch64.tar.gz" -O /tmp/corretto25.tar.gz && tar xzf /tmp/corretto25.tar.gz -C $HOME && rm /tmp/corretto25.tar.gz'
 echo 'export JAVA_HOME=$HOME/amazon-corretto-25.0.3.9.1-linux-aarch64' >> /home/ec2-user/.bashrc
@@ -80,11 +80,11 @@ cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json << 'CWCO
     "logs_collected": {
       "files": {
         "collect_list": [
-          { "file_path": "/var/log/user-data.log", "log_group_name": "{{LOG_GROUP_PREFIX}}/datafusion/user-data", "log_stream_name": "{{RUN_ID}}/{instance_id}-{{NODE_NAME}}" },
-          { "file_path": "/home/ec2-user/datafusion-opensearch-run.log", "log_group_name": "{{LOG_GROUP_PREFIX}}/datafusion/runtime", "log_stream_name": "{{RUN_ID}}/{instance_id}-{{NODE_NAME}}" },
-          { "file_path": "/home/ec2-user/upload-data.log", "log_group_name": "{{LOG_GROUP_PREFIX}}/datafusion/upload-data", "log_stream_name": "{{RUN_ID}}/{instance_id}-{{NODE_NAME}}" },
-          { "file_path": "/home/ec2-user/profile-cron.log", "log_group_name": "{{LOG_GROUP_PREFIX}}/datafusion/profiler", "log_stream_name": "{{RUN_ID}}/{instance_id}-{{NODE_NAME}}" },
-          { "file_path": "/home/ec2-user/vmstat.log", "log_group_name": "{{LOG_GROUP_PREFIX}}/datafusion/vmstat", "log_stream_name": "{{RUN_ID}}/{instance_id}-{{NODE_NAME}}" }
+          { "file_path": "/var/log/user-data.log", "log_group_name": "{{LOG_GROUP_PREFIX}}/parquet/user-data", "log_stream_name": "{{RUN_ID}}/{instance_id}-{{NODE_NAME}}" },
+          { "file_path": "/home/ec2-user/parquet-opensearch-run.log", "log_group_name": "{{LOG_GROUP_PREFIX}}/parquet/runtime", "log_stream_name": "{{RUN_ID}}/{instance_id}-{{NODE_NAME}}" },
+          { "file_path": "/home/ec2-user/upload-data.log", "log_group_name": "{{LOG_GROUP_PREFIX}}/parquet/upload-data", "log_stream_name": "{{RUN_ID}}/{instance_id}-{{NODE_NAME}}" },
+          { "file_path": "/home/ec2-user/profile-cron.log", "log_group_name": "{{LOG_GROUP_PREFIX}}/parquet/profiler", "log_stream_name": "{{RUN_ID}}/{instance_id}-{{NODE_NAME}}" },
+          { "file_path": "/home/ec2-user/vmstat.log", "log_group_name": "{{LOG_GROUP_PREFIX}}/parquet/vmstat", "log_stream_name": "{{RUN_ID}}/{instance_id}-{{NODE_NAME}}" }
         ]
       }
     }
@@ -94,28 +94,28 @@ CWCONFIG
 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json -s
 
 # --- Step 3: Wait for builder to finish and upload tar.gz ---
-echo "Waiting for DataFusion build to be available in S3..."
+echo "Waiting for Parquet build to be available in S3..."
 for i in $(seq 1 120); do
-  if su -l ec2-user -c "aws s3 ls s3://${S3_BUCKET}/builds/opensearch-datafusion.tar.gz" 2>/dev/null; then
-    echo "DataFusion tar.gz found in S3!"
+  if su -l ec2-user -c "aws s3 ls s3://${S3_BUCKET}/builds/opensearch-parquet.tar.gz" 2>/dev/null; then
+    echo "Parquet tar.gz found in S3!"
     break
   fi
-  if [ $i -eq 120 ]; then echo "Timed out waiting for DataFusion build after 60 minutes"; exit 1; fi
+  if [ $i -eq 120 ]; then echo "Timed out waiting for Parquet build after 60 minutes"; exit 1; fi
   echo "  Build not ready yet (attempt $i/120)..."
   sleep 30
 done
 
 # --- Step 4: Download and extract pre-built OpenSearch ---
-echo "Downloading DataFusion OpenSearch from S3..."
-su -l ec2-user -c "aws s3 cp s3://${S3_BUCKET}/builds/opensearch-datafusion.tar.gz /tmp/opensearch-datafusion.tar.gz"
-su -l ec2-user -c 'mkdir -p /home/ec2-user/datafusion-opensearch && tar xzf /tmp/opensearch-datafusion.tar.gz -C /home/ec2-user/datafusion-opensearch'
-rm -f /tmp/opensearch-datafusion.tar.gz
-echo "OpenSearch extracted to ~/datafusion-opensearch"
+echo "Downloading Parquet OpenSearch from S3..."
+su -l ec2-user -c "aws s3 cp s3://${S3_BUCKET}/builds/opensearch-parquet.tar.gz /tmp/opensearch-parquet.tar.gz"
+su -l ec2-user -c 'mkdir -p /home/ec2-user/parquet-opensearch && tar xzf /tmp/opensearch-parquet.tar.gz -C /home/ec2-user/parquet-opensearch'
+rm -f /tmp/opensearch-parquet.tar.gz
+echo "OpenSearch extracted to ~/parquet-opensearch"
 
 # --- Step 5: Configure OpenSearch ---
 if [ "{{CLUSTER_MODE}}" = "multi" ]; then
-  cat > /home/ec2-user/datafusion-opensearch/config/opensearch.yml << 'EOF'
-cluster.name: datafusion-cluster
+  cat > /home/ec2-user/parquet-opensearch/config/opensearch.yml << 'EOF'
+cluster.name: parquet-cluster
 network.host: _site_
 cluster.initial_cluster_manager_nodes: ["clusterManager-seed"]
 discovery.seed_providers: ec2
@@ -123,25 +123,25 @@ discovery.ec2.tag.cluster: {{CLUSTER_TAG}}
 node.roles: [{{NODE_ROLES}}]
 EOF
   if [ "{{NODE_NAME}}" = "clusterManager-seed" ]; then
-    echo 'node.name: clusterManager-seed' >> /home/ec2-user/datafusion-opensearch/config/opensearch.yml
+    echo 'node.name: clusterManager-seed' >> /home/ec2-user/parquet-opensearch/config/opensearch.yml
   fi
 else
-  cat > /home/ec2-user/datafusion-opensearch/config/opensearch.yml << 'EOF'
+  cat > /home/ec2-user/parquet-opensearch/config/opensearch.yml << 'EOF'
 node.name: node
-cluster.name: datafusion-cluster
+cluster.name: parquet-cluster
 network.host: _site_
 discovery.type: single-node
 EOF
 fi
-chown ec2-user:ec2-user /home/ec2-user/datafusion-opensearch/config/opensearch.yml
+chown ec2-user:ec2-user /home/ec2-user/parquet-opensearch/config/opensearch.yml
 
 # --- Step 6: Configure JVM heap ---
-sed -i 's/^-Xms.*/-Xms{{JVM_HEAP}}/' /home/ec2-user/datafusion-opensearch/config/jvm.options
-sed -i 's/^-Xmx.*/-Xmx{{JVM_HEAP}}/' /home/ec2-user/datafusion-opensearch/config/jvm.options
+sed -i 's/^-Xms.*/-Xms{{JVM_HEAP}}/' /home/ec2-user/parquet-opensearch/config/jvm.options
+sed -i 's/^-Xmx.*/-Xmx{{JVM_HEAP}}/' /home/ec2-user/parquet-opensearch/config/jvm.options
 
 # --- Step 7: Write env file and download automation scripts ---
 cat > /home/ec2-user/.opensearch-env << 'ENVEOF'
-ENGINE=datafusion
+ENGINE=parquet
 S3_BUCKET={{S3_PROFILE_BUCKET}}
 RUN_ID={{RUN_ID}}
 NODE_NAME={{NODE_NAME}}
@@ -161,7 +161,7 @@ systemctl start crond
 echo '*/3 * * * * /home/ec2-user/opensearch-test-automation/profiler/profile-opensearch.sh >> /home/ec2-user/profile-cron.log 2>&1' | crontab -u ec2-user -
 
 cat > /etc/logrotate.d/opensearch-profiler << 'LOGROTATE'
-/home/ec2-user/datafusion-opensearch-run.log
+/home/ec2-user/parquet-opensearch-run.log
 /home/ec2-user/profile-cron.log
 /home/ec2-user/vmstat.log {
     size 100M
@@ -176,7 +176,7 @@ cat > /etc/logrotate.d/opensearch-profiler << 'LOGROTATE'
 LOGROTATE
 
 # --- Step 10: Start OpenSearch with sandbox feature flags ---
-# JVM flags required for DataFusion sandbox:
+# JVM flags required for Parquet sandbox:
 #   -Djava.library.path=...  → tells JVM where to find libopensearch_native.so
 #   -Dopensearch.experimental.feature.pluggable.dataformat.enabled=true
 #     → enables the pluggable dataformat infrastructure at the server level
@@ -185,8 +185,8 @@ LOGROTATE
 su -l ec2-user -c '
 export JAVA_HOME=$HOME/amazon-corretto-25.0.3.9.1-linux-aarch64
 export PATH=$JAVA_HOME/bin:$PATH
-export OPENSEARCH_JAVA_OPTS="-Djava.library.path=$HOME/datafusion-opensearch/lib -Dopensearch.experimental.feature.pluggable.dataformat.enabled=true -Dopensearch.experimental.feature.transport.stream.enabled=true -Dopensearch.pluggable.dataformat.merge.enabled=true -Dio.netty.allocator.numDirectArenas=1 -Dio.netty.noUnsafe=false -Dio.netty.tryUnsafe=true -Dio.netty.tryReflectionSetAccessible=true --add-opens=java.base/java.nio=ALL-UNNAMED --enable-native-access=ALL-UNNAMED -XX:+EnableDynamicAgentLoading"
-nohup $HOME/datafusion-opensearch/bin/opensearch > $HOME/datafusion-opensearch-run.log 2>&1 &
+export OPENSEARCH_JAVA_OPTS="-Djava.library.path=$HOME/parquet-opensearch/lib -Dopensearch.experimental.feature.pluggable.dataformat.enabled=true -Dopensearch.experimental.feature.transport.stream.enabled=true -Dopensearch.pluggable.dataformat.merge.enabled=true -Dio.netty.allocator.numDirectArenas=1 -Dio.netty.noUnsafe=false -Dio.netty.tryUnsafe=true -Dio.netty.tryReflectionSetAccessible=true --add-opens=java.base/java.nio=ALL-UNNAMED --enable-native-access=ALL-UNNAMED -XX:+EnableDynamicAgentLoading"
+nohup $HOME/parquet-opensearch/bin/opensearch > $HOME/parquet-opensearch-run.log 2>&1 &
 '
 echo "OpenSearch started! Waiting for it to be ready..."
 

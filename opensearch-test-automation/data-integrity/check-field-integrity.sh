@@ -3,9 +3,9 @@ set -euo pipefail
 
 # =============================================================================
 # check-field-integrity.sh — Compares field-level data between Lucene and
-# DataFusion to verify data integrity.
+# Parquet to verify data integrity.
 #
-# Uses DSL for Lucene (standard path) and PPL for DataFusion (because DSL
+# Uses DSL for Lucene (standard path) and PPL for Parquet (because DSL
 # doesn't work with the sandbox pluggable dataformat indexes).
 #
 # Per-field checks:
@@ -13,15 +13,15 @@ set -euo pipefail
 #   2. Null count   — docs missing a value for the field
 #
 # Usage:
-#   bash check-field-integrity.sh <lucene-host> <datafusion-host> [index-name]
+#   bash check-field-integrity.sh <lucene-host> <parquet-host> [index-name]
 #
 # Reads S3_BUCKET from ~/.opensearch-env for uploading results.
 # =============================================================================
 
 source "$HOME/.opensearch-env" 2>/dev/null || true
 
-LUCENE_HOST="${1:?Usage: $0 <lucene-host> <datafusion-host> [index-name]}"
-DATAFUSION_HOST="${2:?Usage: $0 <lucene-host> <datafusion-host> [index-name]}"
+LUCENE_HOST="${1:?Usage: $0 <lucene-host> <parquet-host> [index-name]}"
+PARQUET_HOST="${2:?Usage: $0 <lucene-host> <parquet-host> [index-name]}"
 INDEX="${3:-clickbench}"
 RUN_ID="${RUN_ID:-run-$(date +%Y%m%d_%H%M%S)}"
 
@@ -32,18 +32,18 @@ mkdir -p "$OUTPUT_DIR"
 echo "============================================"
 echo "  Field Integrity Check (PPL + DSL)"
 echo "  Lucene:     ${LUCENE_HOST}:9200  (DSL)"
-echo "  DataFusion: ${DATAFUSION_HOST}:9200  (PPL)"
+echo "  Parquet: ${PARQUET_HOST}:9200  (PPL)"
 echo "  Index:      ${INDEX}"
 echo "  Run ID:     ${RUN_ID}"
 echo "============================================"
 
-export LUCENE_HOST DATAFUSION_HOST INDEX RUN_ID TIMESTAMP OUTPUT_DIR S3_BUCKET
+export LUCENE_HOST PARQUET_HOST INDEX RUN_ID TIMESTAMP OUTPUT_DIR S3_BUCKET
 
 python3 << 'PYEOF'
 import json, subprocess, os, sys
 
 lucene = os.environ["LUCENE_HOST"]
-datafusion = os.environ["DATAFUSION_HOST"]
+parquet = os.environ["PARQUET_HOST"]
 index = os.environ["INDEX"]
 run_id = os.environ["RUN_ID"]
 timestamp = os.environ["TIMESTAMP"]
@@ -87,11 +87,11 @@ print(f"Found {len(fields)} fields")
 lucene_count = curl_json(f"http://{lucene}:9200/{index}/_count")
 lu_total = lucene_count.get("count", 0) if lucene_count else 0
 
-df_count = ppl_query(datafusion, f"source = {index} | stats count()")
-df_total = df_count.get("rows", df_count.get("datarows", [[0]]))[0][0] if df_count else 0
+pq_count = ppl_query(parquet, f"source = {index} | stats count()")
+pq_total = pq_count.get("rows", pq_count.get("datarows", [[0]]))[0][0] if pq_count else 0
 
 print(f"Lucene total docs:     {lu_total}")
-print(f"DataFusion total docs: {df_total}")
+print(f"Parquet total docs: {pq_total}")
 print()
 
 # --- Step 3: Per-field checks ---
@@ -112,11 +112,11 @@ for field, ftype in fields:
                         body={"size": 0, "aggs": {"m": {"missing": {"field": field}}}})
     lu_nulls = lu_resp.get("aggregations", {}).get("m", {}).get("doc_count", -1) if lu_resp else -1
 
-    # DataFusion: PPL isnull()
-    df_resp = ppl_query(datafusion, f"source = {index} | where isnull({field}) | stats count()")
-    df_nulls = df_resp.get("rows", df_resp.get("datarows", [[-1]]))[0][0] if df_resp and ("rows" in df_resp or "datarows" in df_resp) else -1
+    # Parquet: PPL isnull()
+    pq_resp = ppl_query(parquet, f"source = {index} | where isnull({field}) | stats count()")
+    pq_nulls = pq_resp.get("rows", pq_resp.get("datarows", [[-1]]))[0][0] if pq_resp and ("rows" in pq_resp or "datarows" in pq_resp) else -1
 
-    match = (lu_total == df_total) and (lu_nulls == df_nulls)
+    match = (lu_total == pq_total) and (lu_nulls == pq_nulls)
     status = "✅" if match else "❌"
 
     if match:
@@ -124,15 +124,15 @@ for field, ftype in fields:
     else:
         fail_count += 1
 
-    print(f"{field:<30} | {ftype:<10} | {lu_total:>8} | {lu_nulls:>8} | {df_total:>8} | {df_nulls:>8} | {status}")
+    print(f"{field:<30} | {ftype:<10} | {lu_total:>8} | {lu_nulls:>8} | {pq_total:>8} | {pq_nulls:>8} | {status}")
 
     results.append({
         "field": field,
         "type": ftype,
         "lucene_total": lu_total,
         "lucene_nulls": lu_nulls,
-        "datafusion_total": df_total,
-        "datafusion_nulls": df_nulls,
+        "parquet_total": pq_total,
+        "parquet_nulls": pq_nulls,
         "match": match,
     })
 
@@ -142,14 +142,14 @@ report = {
     "run_id": run_id,
     "index": index,
     "lucene_host": lucene,
-    "datafusion_host": datafusion,
+    "parquet_host": parquet,
     "query_methods": {
         "lucene": "DSL (_count, missing agg)",
-        "datafusion": "PPL (stats count(), isnull())",
+        "parquet": "PPL (stats count(), isnull())",
     },
     "lucene_total_docs": lu_total,
-    "datafusion_total_docs": df_total,
-    "total_docs_match": lu_total == df_total,
+    "parquet_total_docs": pq_total,
+    "total_docs_match": lu_total == pq_total,
     "total_fields": len(fields),
     "pass": pass_count,
     "fail": fail_count,
@@ -163,7 +163,7 @@ with open(json_file, "w") as f:
 print()
 print("============================================")
 print(f"  Field Integrity Check Complete")
-print(f"  Total docs:  Lucene={lu_total}  DataFusion={df_total}")
+print(f"  Total docs:  Lucene={lu_total}  Parquet={pq_total}")
 print(f"  Fields:      {len(fields)} total | {pass_count} pass | {fail_count} fail")
 print(f"  Output:      {json_file}")
 print("============================================")
@@ -177,9 +177,9 @@ if s3_bucket:
 
     csv_file = f"{output_dir}/field-integrity-{timestamp}.csv"
     with open(csv_file, "w") as f:
-        f.write("Field,Type,Lucene_Total,Lucene_Nulls,DataFusion_Total,DataFusion_Nulls,Match\n")
+        f.write("Field,Type,Lucene_Total,Lucene_Nulls,Parquet_Total,Parquet_Nulls,Match\n")
         for r in results:
-            f.write(f"{r['field']},{r['type']},{r['lucene_total']},{r['lucene_nulls']},{r['datafusion_total']},{r['datafusion_nulls']},{r['match']}\n")
+            f.write(f"{r['field']},{r['type']},{r['lucene_total']},{r['lucene_nulls']},{r['parquet_total']},{r['parquet_nulls']},{r['match']}\n")
 
     os.system(f'aws s3 cp "{csv_file}" "{s3_prefix}/field-integrity-{timestamp}.csv"')
     print(f"Uploaded CSV:  {s3_prefix}/field-integrity-{timestamp}.csv")

@@ -16,18 +16,18 @@ echo "=== Deployment Complete ==="
 echo "Outputs written to cdk-outputs.json"
 echo ""
 
-# --- DataFusion OpenSearch Instance ---
+# --- Parquet OpenSearch Instance ---
 INSTANCE_ID=$(jq -r ".\"${STACK_NAME}\".InstanceId // empty" cdk-outputs.json)
 PRIVATE_IP=$(jq -r ".\"${STACK_NAME}\".PrivateIp // empty" cdk-outputs.json)
 SSH_CMD=$(jq -r ".\"${STACK_NAME}\".SSHCommand // empty" cdk-outputs.json)
 
 if [ -n "$INSTANCE_ID" ]; then
-  echo "--- DataFusion OpenSearch ---"
+  echo "--- Parquet OpenSearch ---"
   echo "  Instance ID:  $INSTANCE_ID"
   echo "  Private IP:   $PRIVATE_IP"
   echo "  SSH:          ssh -i \$HOME/${KEY_PAIR_NAME}.pem ec2-user@<public-dns>"
   echo "  Build log:    tail -f /var/log/user-data.log"
-  echo "  Runtime log:  tail -f ~/datafusion-opensearch-run.log"
+  echo "  Runtime log:  tail -f ~/parquet-opensearch-run.log"
   echo ""
 fi
 

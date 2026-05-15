@@ -23,8 +23,10 @@ INSTANCE_ID=$(cat "$HOME/.instance-id" 2>/dev/null | tr -d '[:space:]')
 INSTANCE_LABEL="${INSTANCE_ID}"
 [ -n "${NODE_NAME:-}" ] && INSTANCE_LABEL="${INSTANCE_ID}-${NODE_NAME}"
 
-if [ "$ENGINE" = "datafusion" ]; then
-  DATA_DIR="$HOME/datafusion-opensearch/data"
+if [ "$ENGINE" = "parquet" ]; then
+  DATA_DIR="$HOME/parquet-opensearch/data"
+elif [ "$ENGINE" = "parquetLucene" ]; then
+  DATA_DIR="$HOME/parquetLucene-opensearch/data"
 elif [ "$ENGINE" = "lucene" ]; then
   DATA_DIR="$HOME/lucene-opensearch/data"
 else

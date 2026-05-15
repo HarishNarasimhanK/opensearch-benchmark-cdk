@@ -5,7 +5,7 @@ set -eo pipefail
 # profile-opensearch.sh — Captures 60s CPU flamegraph and uploads to S3
 #
 # Reads config from ~/.opensearch-env:
-#   ENGINE       — "datafusion" or "lucene" (used for S3 path)
+#   ENGINE       — "parquet" or "lucene" (used for S3 path)
 #   S3_BUCKET    — S3 bucket name
 #
 # Usage: Called by cron every 5 minutes, or manually:

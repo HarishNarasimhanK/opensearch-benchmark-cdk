@@ -3,11 +3,11 @@ set -exo pipefail
 exec > /var/log/user-data.log 2>&1
 
 # =============================================================================
-# user-data-builder.sh — Builds both DataFusion and Lucene OpenSearch from
+# user-data-builder.sh — Builds both Parquet and Lucene OpenSearch from
 # source, packages each as tar.gz, uploads to S3, then shuts down.
 #
-# DataFusion build: JDK 25 + Rust + sandbox localDistro + 8 plugins + native lib
-# Lucene build:     JDK 21 + vanilla localDistro + discovery-ec2 plugin
+# Parquet build: JDK 25 + Rust + sandbox localDistro + 9 plugins + native lib
+# Lucene build:  JDK 21 + vanilla localDistro + discovery-ec2 plugin
 #
 # This instance is a temporary build machine — shuts down after uploading.
 # =============================================================================
@@ -27,11 +27,11 @@ yum groupinstall -y 'Development Tools'
 # JDK 21 for Lucene (system-level)
 yum install -y java-21-amazon-corretto-devel
 
-# JDK 25 for DataFusion (user-level, sandbox requires 25+)
+# JDK 25 for Parquet (user-level, sandbox requires 25+)
 echo "=== Installing JDK 25 (Corretto) ==="
 su -l ec2-user -c 'wget -q "https://corretto.aws/downloads/resources/25.0.3.9.1/amazon-corretto-25.0.3.9.1-linux-aarch64.tar.gz" -O /tmp/corretto25.tar.gz && tar xzf /tmp/corretto25.tar.gz -C $HOME && rm /tmp/corretto25.tar.gz'
 
-# Rust for DataFusion native lib
+# Rust for Parquet native lib
 echo "=== Installing Rust ==="
 su -l ec2-user -c 'curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable'
 
@@ -52,25 +52,25 @@ CWCONFIG
 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json -s
 
 # =============================================================================
-# BUILD 1: DataFusion OpenSearch (sandbox + 8 plugins + native lib)
+# BUILD 1: Parquet OpenSearch (sandbox + 8 plugins + native lib)
 # =============================================================================
 echo ""
 echo "============================================"
-echo "  Building DataFusion OpenSearch (sandbox)"
+echo "  Building Parquet OpenSearch (sandbox)"
 echo "============================================"
 
-# All DataFusion build steps run as ec2-user with JDK 25 + Rust on PATH
+# All Parquet build steps run as ec2-user with JDK 25 + Rust on PATH
 su -l ec2-user -c '
 set -exo pipefail
 export JAVA_HOME=$HOME/amazon-corretto-25.0.3.9.1-linux-aarch64
 export PATH=$JAVA_HOME/bin:$HOME/.cargo/bin:$PATH
 
-SRC=$HOME/datafusion-opensearch-src
-DIST=$HOME/datafusion-opensearch
+SRC=$HOME/parquet-opensearch-src
+DIST=$HOME/parquet-opensearch
 
 # Clone
-echo "=== Cloning OpenSearch ({{DATAFUSION_BRANCH}}) ==="
-git clone --depth 1 --branch {{DATAFUSION_BRANCH}} {{DATAFUSION_REPO}} $SRC
+echo "=== Cloning OpenSearch ({{PARQUET_BRANCH}}) ==="
+git clone --depth 1 --branch {{PARQUET_BRANCH}} {{PARQUET_REPO}} $SRC
 
 # Build Rust native library (~15 min)
 echo "=== Building Rust native library ==="
@@ -82,7 +82,7 @@ echo "=== Building localDistro (sandbox) ==="
 cd $SRC
 ./gradlew localDistro -Dsandbox.enabled=true -x javadoc -x test -x missingJavadoc
 
-# Build arrow-flight-rpc plugin (analytics-engine depends on it) + 7 sandbox plugin zips (~1 min)
+# Build arrow-flight-rpc plugin (analytics-engine depends on it) + 6 sandbox plugin zips (~1 min)
 echo "=== Building plugin zips ==="
 ./gradlew -Dsandbox.enabled=true \
   :plugins:arrow-flight-rpc:bundlePlugin \
@@ -92,35 +92,48 @@ echo "=== Building plugin zips ==="
   :sandbox:plugins:analytics-backend-lucene:bundlePlugin \
   :sandbox:plugins:dsl-query-executor:bundlePlugin \
   :sandbox:plugins:composite-engine:bundlePlugin \
-  :sandbox:plugins:test-ppl-frontend:bundlePlugin \
   -x test -x javadoc -x missingJavadoc
 
 # Prepare distribution directory
-echo "=== Preparing DataFusion distribution ==="
+echo "=== Preparing Parquet distribution ==="
 mkdir -p $DIST
 cp -r $SRC/build/distribution/local/opensearch-*/* $DIST/
 
 # Copy native library into distribution lib/
 cp $SRC/sandbox/libs/dataformat-native/rust/target/release/libopensearch_native.so $DIST/lib/
 
-# Install arrow-flight-rpc first (analytics-engine depends on it), then 7 sandbox plugins
+# Install plugins (arrow-flight-rpc first, then sandbox plugins)
 echo "=== Installing plugins ==="
-ARROW_ZIP=$(ls $SRC/plugins/arrow-flight-rpc/build/distributions/arrow-flight-rpc-*.zip | head -1)
-echo "  Installing: $(basename $ARROW_ZIP)"
-$DIST/bin/opensearch-plugin install --batch "file://$ARROW_ZIP"
-
 for zip in \
+  $SRC/plugins/arrow-flight-rpc/build/distributions/arrow-flight-rpc-*.zip \
   $SRC/sandbox/plugins/analytics-engine/build/distributions/analytics-engine-*.zip \
   $SRC/sandbox/plugins/parquet-data-format/build/distributions/parquet-data-format-*.zip \
   $SRC/sandbox/plugins/analytics-backend-datafusion/build/distributions/analytics-backend-datafusion-*.zip \
   $SRC/sandbox/plugins/analytics-backend-lucene/build/distributions/analytics-backend-lucene-*.zip \
   $SRC/sandbox/plugins/dsl-query-executor/build/distributions/dsl-query-executor-*.zip \
-  $SRC/sandbox/plugins/composite-engine/build/distributions/composite-engine-*.zip \
-  $SRC/sandbox/plugins/test-ppl-frontend/build/distributions/test-ppl-frontend-*.zip
+  $SRC/sandbox/plugins/composite-engine/build/distributions/composite-engine-*.zip
 do
   echo "  Installing: $(basename $zip)"
   $DIST/bin/opensearch-plugin install --batch "file://$zip"
 done
+
+# Build and install job-scheduler plugin (SQL dependency)
+echo "=== Building job-scheduler plugin ==="
+git clone --depth 1 --branch main https://github.com/opensearch-project/job-scheduler.git $HOME/job-scheduler
+cd $HOME/job-scheduler
+./gradlew assemble -Dbuild.snapshot=true -x test -x javadoc
+JOB_ZIP=$(find $HOME/job-scheduler/build/distributions -name "opensearch-job-scheduler-*.zip" -not -name "*sample*" | head -1)
+echo "  Installing: $(basename $JOB_ZIP)"
+$DIST/bin/opensearch-plugin install --batch "file://$JOB_ZIP"
+
+# Build and install SQL plugin (provides /_plugins/_ppl endpoint)
+echo "=== Building SQL plugin ==="
+git clone --depth 1 --branch main https://github.com/opensearch-project/sql.git $HOME/sql-plugin
+cd $HOME/sql-plugin
+./gradlew publishToMavenLocal -Dbuild.snapshot=true -x test -x javadoc
+SQL_ZIP=$(find $HOME/.m2/repository/org/opensearch/plugin/opensearch-sql-plugin -name "*.zip" | head -1)
+echo "  Installing: $(basename $SQL_ZIP)"
+$DIST/bin/opensearch-plugin install --batch "file://$SQL_ZIP"
 
 # Install discovery-ec2 plugin (for multi-node)
 echo "=== Building discovery-ec2 plugin ==="
@@ -131,10 +144,10 @@ cd $SRC
   echo "discovery-ec2 plugin build failed (non-fatal — only needed for multi-node)"
 
 # Package and upload
-echo "=== Packaging DataFusion tar.gz ==="
-tar czf /tmp/opensearch-datafusion.tar.gz -C $DIST .
-aws s3 cp /tmp/opensearch-datafusion.tar.gz s3://'"${S3_BUCKET}"'/builds/opensearch-datafusion.tar.gz
-echo "=== DataFusion build uploaded ==="
+echo "=== Packaging Parquet tar.gz ==="
+tar czf /tmp/opensearch-parquet.tar.gz -C $DIST .
+aws s3 cp /tmp/opensearch-parquet.tar.gz s3://'"${S3_BUCKET}"'/builds/opensearch-parquet.tar.gz
+echo "=== Parquet build uploaded ==="
 
 # Verify
 echo "Installed plugins:"
@@ -143,8 +156,8 @@ echo "Native lib:"
 ls -lh $DIST/lib/libopensearch_native.so
 '
 
-# --- Clean up DataFusion source to free disk for Lucene build ---
-rm -rf /home/ec2-user/datafusion-opensearch-src /home/ec2-user/datafusion-opensearch /tmp/opensearch-datafusion.tar.gz
+# --- Clean up Parquet source to free disk for Lucene build ---
+rm -rf /home/ec2-user/parquet-opensearch-src /home/ec2-user/parquet-opensearch /tmp/opensearch-parquet.tar.gz
 
 # =============================================================================
 # BUILD 2: Lucene OpenSearch (vanilla, no sandbox plugins, JDK 21)
@@ -195,7 +208,7 @@ echo "BUILDS_COMPLETE=$(date -u +%Y%m%d_%H%M%S)" | su -l ec2-user -c "aws s3 cp 
 echo ""
 echo "============================================"
 echo "  Both builds complete and uploaded to S3!"
-echo "  s3://${S3_BUCKET}/builds/opensearch-datafusion.tar.gz"
+echo "  s3://${S3_BUCKET}/builds/opensearch-parquet.tar.gz"
 echo "  s3://${S3_BUCKET}/builds/opensearch-lucene.tar.gz"
 echo "============================================"
 

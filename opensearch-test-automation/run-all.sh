@@ -10,13 +10,13 @@ set -euo pipefail
 #   s3://bucket/runs/<RUN_ID>/data-integrity/...
 #   s3://bucket/runs/<RUN_ID>/data/<engine>/<instance-id>/data.tar.gz
 #
-# DataFusion runs first, Lucene runs second.
+# Parquet runs first, Lucene runs second.
 # Both run sequentially — OSB does not allow two instances on the same machine.
 #
 # Reads config from ~/.opensearch-env:
-#   DATAFUSION_HOST              — DataFusion OpenSearch private IP or ALB DNS
+#   PARQUET_HOST              — Parquet OpenSearch private IP or ALB DNS
 #   LUCENE_HOST                  — Lucene OpenSearch private IP or ALB DNS (empty if disabled)
-#   WORKLOAD_PATH_DATAFUSION     — Path to datafusion clickbench workload
+#   WORKLOAD_PATH_PARQUET     — Path to parquet clickbench workload
 #   WORKLOAD_PATH_LUCENE         — Path to upstream clickbench workload
 #
 # Usage: Called automatically by user-data, or manually:
@@ -39,7 +39,7 @@ echo "============================================"
 echo "  OpenSearch Test Automation"
 echo "  Run ID:          ${RUN_ID}"
 echo "  Lucene host:     ${LUCENE_HOST:-not enabled} (DSL queries)"
-echo "  DataFusion host: ${DATAFUSION_HOST} (PPL queries)"
+echo "  Parquet host: ${PARQUET_HOST} (PPL queries)"
 echo "  S3 prefix:       s3://${S3_BUCKET}/runs/${RUN_ID}/"
 echo "============================================"
 
@@ -54,20 +54,20 @@ aws s3 rm "s3://${S3_BUCKET}/flags/BENCHMARK_COMPLETE" 2>/dev/null || true
 
 # --- Run benchmarks + correctness sequentially ---
 # OSB does not allow two instances on the same machine.
-# DataFusion runs first, then Lucene.
+# Parquet runs first, then Lucene.
 
 echo ""
-echo ">>> Running DataFusion benchmark (PPL queries)..."
+echo ">>> Running Parquet benchmark (PPL queries)..."
 bash "$REPO_DIR/benchmark/run-benchmark.sh" \
-  --host "$DATAFUSION_HOST" \
-  --engine datafusion \
-  --workload "$WORKLOAD_PATH_DATAFUSION" \
-  2>&1 | tee "$HOME/benchmark-datafusion.log"
+  --host "$PARQUET_HOST" \
+  --engine parquet \
+  --workload "$WORKLOAD_PATH_PARQUET" \
+  2>&1 | tee "$HOME/benchmark-parquet.log"
 
 echo ""
-echo ">>> Running DataFusion correctness test..."
-bash "$REPO_DIR/correctness/run-datafusion-correctness-test.sh" "$DATAFUSION_HOST" "datafusion" \
-  2>&1 | tee "$HOME/correctness-datafusion.log"
+echo ">>> Running Parquet correctness test..."
+bash "$REPO_DIR/correctness/run-parquet-correctness-test.sh" "$PARQUET_HOST" "parquet" \
+  2>&1 | tee "$HOME/correctness-parquet.log"
 
 if [ -n "${LUCENE_HOST:-}" ]; then
   echo ""
@@ -95,9 +95,9 @@ echo "============================================"
 
 # --- Run field integrity check (data quality comparison) ---
 echo ""
-echo ">>> Running field integrity check (Lucene vs DataFusion)..."
+echo ">>> Running field integrity check (Lucene vs Parquet)..."
 if [ -n "${LUCENE_HOST:-}" ]; then
-  bash "$REPO_DIR/data-integrity/check-field-integrity.sh" "$LUCENE_HOST" "$DATAFUSION_HOST" \
+  bash "$REPO_DIR/data-integrity/check-field-integrity.sh" "$LUCENE_HOST" "$PARQUET_HOST" \
     2>&1 | tee "$HOME/field-integrity.log"
 else
   echo "Lucene not enabled, skipping field integrity check."
@@ -106,12 +106,12 @@ fi
 # --- Generate comparison visualization ---
 echo ""
 echo ">>> Generating benchmark comparison dashboard..."
-DF_CSV=$(ls -t "$HOME/benchmark-results/datafusion/"*.csv 2>/dev/null | head -1)
+PQ_CSV=$(ls -t "$HOME/benchmark-results/parquet/"*.csv 2>/dev/null | head -1)
 LU_CSV=$(ls -t "$HOME/benchmark-results/lucene/"*.csv 2>/dev/null | head -1)
 
-if [ -n "$DF_CSV" ] && [ -n "$LU_CSV" ]; then
+if [ -n "$PQ_CSV" ] && [ -n "$LU_CSV" ]; then
   python3 "$REPO_DIR/visualization/generate-comparison.py" \
-    --datafusion-csv "$DF_CSV" \
+    --parquet-csv "$PQ_CSV" \
     --lucene-csv "$LU_CSV" \
     --output "$HOME/benchmark-comparison.html" \
     --run-id "$RUN_ID" \
@@ -124,7 +124,7 @@ if [ -n "$DF_CSV" ] && [ -n "$LU_CSV" ]; then
     echo "Dashboard uploaded to: s3://${S3_BUCKET}/runs/${RUN_ID}/benchmark-results/benchmark-comparison.html"
   fi
 else
-  echo "Skipping dashboard — missing benchmark CSVs (DF=$DF_CSV, LU=$LU_CSV)"
+  echo "Skipping dashboard — missing benchmark CSVs (PQ=$PQ_CSV, LU=$LU_CSV)"
 fi
 
 # --- Signal data nodes to upload their data folders ---
