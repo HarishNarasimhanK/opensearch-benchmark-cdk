@@ -17,6 +17,7 @@ S3_BUCKET="{{S3_PROFILE_BUCKET}}"
 # --- Step 1: Clean up old builds from S3 ---
 echo "=== Cleaning old builds from S3 ==="
 su -l ec2-user -c "aws s3 rm s3://${S3_BUCKET}/builds/ --recursive" || true
+su -l ec2-user -c "aws s3 rm s3://${S3_BUCKET}/flags/BENCHMARK_COMPLETE" || true
 
 # --- Step 2: Install build dependencies ---
 echo "=== Installing build dependencies ==="
