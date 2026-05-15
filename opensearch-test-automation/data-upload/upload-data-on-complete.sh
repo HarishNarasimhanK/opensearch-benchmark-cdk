@@ -88,6 +88,22 @@ while true; do
         echo "WARNING: Storage size capture failed (non-fatal)"
     fi
 
+    # --- Wait 30 min for segment merges to complete ---
+    echo "Waiting 30 minutes for segment merges to complete..."
+    sleep 1800
+
+    # --- Stop OpenSearch before tarring to avoid 'file changed' errors ---
+    echo "Stopping OpenSearch..."
+    OS_PID=$(pgrep -f 'org.opensearch.bootstrap.OpenSearch' || true)
+    if [ -n "$OS_PID" ]; then
+      kill "$OS_PID" 2>/dev/null || true
+      for i in $(seq 1 30); do
+        if ! kill -0 "$OS_PID" 2>/dev/null; then break; fi
+        sleep 1
+      done
+    fi
+    echo "OpenSearch stopped."
+
     # --- Upload ---
     if [ -d "$DATA_DIR" ] && [ "$(ls -A "$DATA_DIR" 2>/dev/null)" ]; then
       echo "Tarring data directory..."
