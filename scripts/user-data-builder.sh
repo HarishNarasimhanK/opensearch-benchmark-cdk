@@ -83,9 +83,10 @@ echo "=== Building localDistro (sandbox) ==="
 cd $SRC
 ./gradlew localDistro -Dsandbox.enabled=true -x javadoc -x test -x missingJavadoc
 
-# Build arrow-flight-rpc plugin (analytics-engine depends on it) + 6 sandbox plugin zips (~1 min)
+# Build arrow-base + arrow-flight-rpc plugin (analytics-engine depends on it) + 6 sandbox plugin zips (~1 min)
 echo "=== Building plugin zips ==="
 ./gradlew -Dsandbox.enabled=true \
+  :plugins:arrow-base:bundlePlugin \
   :plugins:arrow-flight-rpc:bundlePlugin \
   :sandbox:plugins:analytics-engine:bundlePlugin \
   :sandbox:plugins:parquet-data-format:bundlePlugin \
@@ -103,9 +104,10 @@ cp -r $SRC/build/distribution/local/opensearch-*/* $DIST/
 # Copy native library into distribution lib/
 cp $SRC/sandbox/libs/dataformat-native/rust/target/release/libopensearch_native.so $DIST/lib/
 
-# Install plugins (arrow-flight-rpc first, then sandbox plugins)
+# Install plugins (arrow-base first, then arrow-flight-rpc, then sandbox plugins)
 echo "=== Installing plugins ==="
 for zip in \
+  $SRC/plugins/arrow-base/build/distributions/arrow-base-*.zip \
   $SRC/plugins/arrow-flight-rpc/build/distributions/arrow-flight-rpc-*.zip \
   $SRC/sandbox/plugins/analytics-engine/build/distributions/analytics-engine-*.zip \
   $SRC/sandbox/plugins/parquet-data-format/build/distributions/parquet-data-format-*.zip \
