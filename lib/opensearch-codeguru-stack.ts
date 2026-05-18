@@ -10,42 +10,66 @@ import * as fs from "fs";
 import * as path from "path";
 
 interface OpenSearchCodeGuruStackProps extends cdk.StackProps {
-  branch: string;
-  opensearchRepo: string;
+  // Parquet engine
+  parquetRepo: string;
+  parquetBranch: string;
+  parquetInstanceType: string;
+  parquetEbsSizeGb: number;
+  parquetEbsIops: number;
+  parquetEbsThroughput: number;
+  parquetJvmHeap: string;
+  parquetWorkloadRepo: string;
+  parquetWorkloadBranch: string;
+
+  // Lucene engine
+  luceneEnabled: boolean;
+  luceneRepo: string;
+  luceneBranch: string;
+  luceneInstanceType: string;
+  luceneEbsSizeGb: number;
+  luceneEbsIops: number;
+  luceneEbsThroughput: number;
+  luceneJvmHeap: string;
+  luceneWorkloadRepo: string;
+  luceneWorkloadBranch: string;
+
+  // ParquetLucene engine
+  parquetLuceneEnabled: boolean;
+  parquetLuceneInstanceType: string;
+  parquetLuceneEbsSizeGb: number;
+  parquetLuceneEbsIops: number;
+  parquetLuceneEbsThroughput: number;
+  parquetLuceneJvmHeap: string;
+  parquetLuceneWorkloadRepo: string;
+  parquetLuceneWorkloadBranch: string;
+
+  // Benchmark instance
+  benchmarkEnabled: boolean;
+  benchmarkInstanceType: string;
+  benchmarkEbsSizeGb: number;
+  benchmarkEbsIops: number;
+  benchmarkEbsThroughput: number;
+  testIterations: number;
+  ingestPercentage: number;
+
+  // Networking
   vpcId: string;
   subnetId: string;
   subnetAz: string;
   securityGroupId: string;
   keyPairName: string;
   s3ProfileBucket: string;
-  instanceType: string;
-  ebsSizeGb: number;
-  ebsIops: number;
-  ebsThroughput: number;
-  jvmHeap: string;
-  parquetJvmHeap?: string;
-  benchmarkEnabled: boolean;
-  benchmarkInstanceType: string;
-  benchmarkEbsSizeGb: number;
-  benchmarkEbsIops: number;
-  benchmarkEbsThroughput: number;
-  parquetWorkloadRepo: string;
-  parquetWorkloadBranch: string;
-  luceneWorkloadRepo: string;
-  luceneWorkloadBranch: string;
-  testIterations: number;
-  ingestPercentage: number;
-  luceneEnabled: boolean;
-  luceneRepo: string;
-  luceneBranch: string;
-  parquetLuceneEnabled: boolean;
-  parquetLuceneWorkloadRepo: string;
-  parquetLuceneWorkloadBranch: string;
+
+  // Cluster
   clusterMode: string;
   dataNodeCount: number;
+
+  // Metrics
   metricsStoreHost: string;
   metricsStorePort: string;
   metricsStoreSecure: string;
+
+  // Run
   runId: string;
   runIdPrefix: string;
 }
@@ -54,16 +78,16 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: OpenSearchCodeGuruStackProps) {
     super(scope, id, props);
 
-    const { branch, opensearchRepo, vpcId, subnetId, subnetAz, securityGroupId, keyPairName,
-      s3ProfileBucket, instanceType, ebsSizeGb, ebsIops,
-      ebsThroughput, jvmHeap, benchmarkEnabled, benchmarkInstanceType, benchmarkEbsSizeGb,
-      benchmarkEbsIops, benchmarkEbsThroughput,
-      parquetWorkloadRepo, parquetWorkloadBranch, luceneWorkloadRepo, luceneWorkloadBranch,
-      testIterations, ingestPercentage, luceneEnabled, luceneRepo, luceneBranch,
-      parquetLuceneEnabled, parquetLuceneWorkloadRepo, parquetLuceneWorkloadBranch,
+    const { vpcId, subnetId, subnetAz, securityGroupId, keyPairName, s3ProfileBucket,
+      parquetRepo, parquetBranch, parquetInstanceType, parquetEbsSizeGb, parquetEbsIops, parquetEbsThroughput, parquetJvmHeap,
+      parquetWorkloadRepo, parquetWorkloadBranch,
+      luceneEnabled, luceneRepo, luceneBranch, luceneInstanceType, luceneEbsSizeGb, luceneEbsIops, luceneEbsThroughput, luceneJvmHeap,
+      luceneWorkloadRepo, luceneWorkloadBranch,
+      parquetLuceneEnabled, parquetLuceneInstanceType, parquetLuceneEbsSizeGb, parquetLuceneEbsIops, parquetLuceneEbsThroughput, parquetLuceneJvmHeap,
+      parquetLuceneWorkloadRepo, parquetLuceneWorkloadBranch,
+      benchmarkEnabled, benchmarkInstanceType, benchmarkEbsSizeGb, benchmarkEbsIops, benchmarkEbsThroughput,
+      testIterations, ingestPercentage,
       clusterMode, dataNodeCount, metricsStoreHost, metricsStorePort, metricsStoreSecure, runId, runIdPrefix } = props;
-
-    const parquetJvmHeap = props.parquetJvmHeap || jvmHeap;
 
     const isMultiNode = clusterMode === "multi";
     const clusterTag = `${id}-parquet-cluster`;
@@ -153,7 +177,7 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
         .replace(/\{\{RUN_ID\}\}/g, runId)
         .replace(/\{\{LOG_GROUP_PREFIX\}\}/g, logGroupPrefix);
 
-      const inst = createInstance(nodeId, ltId, script, instanceType, ebsSizeGb, ebsIops, ebsThroughput);
+      const inst = createInstance(nodeId, ltId, script, parquetInstanceType, parquetEbsSizeGb, parquetEbsIops, parquetEbsThroughput);
       const nameTag = nodeName ? `${id}-Parquet-${runId}-${nodeName}` : `${id}-Parquet-${runId}`;
       cdk.Tags.of(inst).add("Name", nameTag);
 
@@ -168,15 +192,15 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
     // Builder Instance — builds both Parquet and Lucene, uploads tar.gz to S3
     // =========================================================================
     const builderScript = fs.readFileSync(path.join(__dirname, "..", "scripts", "user-data-builder.sh"), "utf-8")
-      .replace(/\{\{PARQUET_BRANCH\}\}/g, branch)
-      .replace(/\{\{PARQUET_REPO\}\}/g, opensearchRepo)
+      .replace(/\{\{PARQUET_BRANCH\}\}/g, parquetBranch)
+      .replace(/\{\{PARQUET_REPO\}\}/g, parquetRepo)
       .replace(/\{\{LUCENE_BRANCH\}\}/g, luceneBranch)
       .replace(/\{\{LUCENE_REPO\}\}/g, luceneRepo)
       .replace(/\{\{S3_PROFILE_BUCKET\}\}/g, s3ProfileBucket)
       .replace(/\{\{RUN_ID\}\}/g, runId)
       .replace(/\{\{LOG_GROUP_PREFIX\}\}/g, logGroupPrefix);
 
-    const builderInstance = createInstance("BuilderInstance", "BuilderLt", builderScript, instanceType, ebsSizeGb, ebsIops, ebsThroughput);
+    const builderInstance = createInstance("BuilderInstance", "BuilderLt", builderScript, parquetInstanceType, parquetEbsSizeGb, parquetEbsIops, parquetEbsThroughput);
     cdk.Tags.of(builderInstance).add("Name", `${id}-Builder-${runId}`);
 
     new cdk.CfnOutput(this, "A1_BuilderSSH", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${builderInstance.instancePublicDnsName}` });
@@ -254,7 +278,7 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
       const createLuceneInstance = (nodeId: string, ltId: string, nodeName: string, nodeRoles: string): ec2.Instance => {
         const script = fs.readFileSync(path.join(__dirname, "..", "scripts", "user-data-lucene.sh"), "utf-8")
           .replace(/\{\{S3_PROFILE_BUCKET\}\}/g, s3ProfileBucket)
-          .replace(/\{\{JVM_HEAP\}\}/g, jvmHeap)
+          .replace(/\{\{JVM_HEAP\}\}/g, luceneJvmHeap)
           .replace(/\{\{SCRIPTS_S3_PATH\}\}/g, scriptsS3Path)
           .replace(/\{\{CLUSTER_MODE\}\}/g, clusterMode)
           .replace(/\{\{CLUSTER_TAG\}\}/g, luceneClusterTag)
@@ -264,7 +288,7 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
           .replace(/\{\{RUN_ID\}\}/g, runId)
           .replace(/\{\{LOG_GROUP_PREFIX\}\}/g, logGroupPrefix);
 
-        const inst = createInstance(nodeId, ltId, script, instanceType, ebsSizeGb, ebsIops, ebsThroughput);
+        const inst = createInstance(nodeId, ltId, script, luceneInstanceType, luceneEbsSizeGb, luceneEbsIops, luceneEbsThroughput);
         const nameTag = nodeName ? `${id}-Lucene-${runId}-${nodeName}` : `${id}-Lucene-${runId}`;
         cdk.Tags.of(inst).add("Name", nameTag);
 
@@ -338,7 +362,7 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
       const createParquetLuceneInstance = (nodeId: string, ltId: string, nodeName: string, nodeRoles: string): ec2.Instance => {
         const script = fs.readFileSync(path.join(__dirname, "..", "scripts", "user-data-parquetLucene.sh"), "utf-8")
           .replace(/\{\{S3_PROFILE_BUCKET\}\}/g, s3ProfileBucket)
-          .replace(/\{\{JVM_HEAP\}\}/g, parquetJvmHeap)
+          .replace(/\{\{JVM_HEAP\}\}/g, parquetLuceneJvmHeap)
           .replace(/\{\{SCRIPTS_S3_PATH\}\}/g, scriptsS3Path)
           .replace(/\{\{CLUSTER_MODE\}\}/g, clusterMode)
           .replace(/\{\{CLUSTER_TAG\}\}/g, `${id}-parquetLucene-cluster`)
@@ -348,7 +372,7 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
           .replace(/\{\{RUN_ID\}\}/g, runId)
           .replace(/\{\{LOG_GROUP_PREFIX\}\}/g, logGroupPrefix);
 
-        const inst = createInstance(nodeId, ltId, script, instanceType, ebsSizeGb, ebsIops, ebsThroughput);
+        const inst = createInstance(nodeId, ltId, script, parquetLuceneInstanceType, parquetLuceneEbsSizeGb, parquetLuceneEbsIops, parquetLuceneEbsThroughput);
         cdk.Tags.of(inst).add("Name", `${id}-ParquetLucene-${runId}-${nodeName}`);
         return inst;
       };
@@ -372,8 +396,11 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
         .replace(/\{\{PARQUET_WORKLOAD_BRANCH\}\}/g, parquetWorkloadBranch)
         .replace(/\{\{LUCENE_WORKLOAD_REPO\}\}/g, luceneWorkloadRepo)
         .replace(/\{\{LUCENE_WORKLOAD_BRANCH\}\}/g, luceneWorkloadBranch)
+        .replace(/\{\{PARQUET_LUCENE_WORKLOAD_REPO\}\}/g, parquetLuceneWorkloadRepo)
+        .replace(/\{\{PARQUET_LUCENE_WORKLOAD_BRANCH\}\}/g, parquetLuceneWorkloadBranch)
         .replace(/\{\{PARQUET_PRIVATE_IP\}\}/g, parquetEndpoint)
         .replace(/\{\{LUCENE_PRIVATE_IP\}\}/g, luceneEndpoint)
+        .replace(/\{\{PARQUET_LUCENE_PRIVATE_IP\}\}/g, parquetLuceneEndpoint)
         .replace(/\{\{S3_PROFILE_BUCKET\}\}/g, s3ProfileBucket)
         .replace(/\{\{SCRIPTS_S3_PATH\}\}/g, scriptsS3Path)
         .replace(/\{\{DATA_NODE_COUNT\}\}/g, String(isMultiNode ? dataNodeCount : 1))

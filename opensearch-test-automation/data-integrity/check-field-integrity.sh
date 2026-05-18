@@ -64,7 +64,7 @@ def curl_json(url, method="GET", body=None):
         return None
 
 def ppl_query(host, query):
-    return curl_json(f"http://{host}:9200/_analytics/ppl", method="POST",
+    return curl_json(f"http://{host}:9200/_plugins/_ppl", method="POST",
                      body={"query": query})
 
 # --- Step 1: Get field list and types from Lucene mapping ---

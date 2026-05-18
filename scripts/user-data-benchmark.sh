@@ -22,6 +22,8 @@ cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json << 'CWCO
           { "file_path": "/home/ec2-user/benchmark-lucene.log", "log_group_name": "{{LOG_GROUP_PREFIX}}/benchmark/lucene", "log_stream_name": "{{RUN_ID}}/{instance_id}-benchmark" },
           { "file_path": "/home/ec2-user/benchmark-parquet.log", "log_group_name": "{{LOG_GROUP_PREFIX}}/benchmark/parquet", "log_stream_name": "{{RUN_ID}}/{instance_id}-benchmark" },
           { "file_path": "/home/ec2-user/correctness-lucene.log", "log_group_name": "{{LOG_GROUP_PREFIX}}/benchmark/correctness-lucene", "log_stream_name": "{{RUN_ID}}/{instance_id}-benchmark" },
+          { "file_path": "/home/ec2-user/benchmark-parquetLucene.log", "log_group_name": "{{LOG_GROUP_PREFIX}}/benchmark/parquetLucene", "log_stream_name": "{{RUN_ID}}/{instance_id}-benchmark" },
+          { "file_path": "/home/ec2-user/correctness-parquetLucene.log", "log_group_name": "{{LOG_GROUP_PREFIX}}/benchmark/correctness-parquetLucene", "log_stream_name": "{{RUN_ID}}/{instance_id}-benchmark" },
           { "file_path": "/home/ec2-user/correctness-parquet.log", "log_group_name": "{{LOG_GROUP_PREFIX}}/benchmark/correctness-parquet", "log_stream_name": "{{RUN_ID}}/{instance_id}-benchmark" }
         ]
       }
@@ -50,6 +52,7 @@ cat > /home/ec2-user/.opensearch-env << 'ENVEOF'
 S3_BUCKET={{S3_PROFILE_BUCKET}}
 PARQUET_HOST={{PARQUET_PRIVATE_IP}}
 LUCENE_HOST={{LUCENE_PRIVATE_IP}}
+PARQUET_LUCENE_HOST={{PARQUET_LUCENE_PRIVATE_IP}}
 DATA_NODE_COUNT={{DATA_NODE_COUNT}}
 RUN_ID={{RUN_ID}}
 METRICS_STORE_HOST={{METRICS_STORE_HOST}}
@@ -59,6 +62,7 @@ TEST_ITERATIONS={{TEST_ITERATIONS}}
 INGEST_PERCENTAGE={{INGEST_PERCENTAGE}}
 WORKLOAD_PATH_PARQUET=/home/ec2-user/parquet-workloads/clickbench
 WORKLOAD_PATH_LUCENE=/home/ec2-user/lucene-workloads/clickbench
+WORKLOAD_PATH_PARQUET_LUCENE=/home/ec2-user/parquetLucene-workloads/clickbench
 ENVEOF
 chown ec2-user:ec2-user /home/ec2-user/.opensearch-env
 
@@ -66,6 +70,7 @@ chown ec2-user:ec2-user /home/ec2-user/.opensearch-env
 su -l ec2-user -c 'aws s3 cp {{SCRIPTS_S3_PATH}} /tmp/automation-scripts.zip && mkdir -p /home/ec2-user/opensearch-test-automation && cd /home/ec2-user/opensearch-test-automation && unzip -o /tmp/automation-scripts.zip && chmod +x /home/ec2-user/opensearch-test-automation/**/*.sh && rm /tmp/automation-scripts.zip'
 su -l ec2-user -c 'git clone -b {{PARQUET_WORKLOAD_BRANCH}} {{PARQUET_WORKLOAD_REPO}} /home/ec2-user/parquet-workloads'
 su -l ec2-user -c 'git clone -b {{LUCENE_WORKLOAD_BRANCH}} {{LUCENE_WORKLOAD_REPO}} /home/ec2-user/lucene-workloads'
+su -l ec2-user -c 'git clone -b {{PARQUET_LUCENE_WORKLOAD_BRANCH}} {{PARQUET_LUCENE_WORKLOAD_REPO}} /home/ec2-user/parquetLucene-workloads'
 
 # --- Step 4b: Pre-download corpus (DISABLED — see FUTURE-ADDITIONS.md item 4) ---
 # Uncomment to warm the OSB cache with a local throwaway OpenSearch.

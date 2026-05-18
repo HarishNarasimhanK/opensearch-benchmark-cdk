@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # =============================================================================
-# run-all.sh — Orchestrates benchmark + correctness tests for both engines
+# run-all.sh — Orchestrates benchmark + correctness tests for all engines
 #
 # Generates a RUN_ID (set at deploy time) that all scripts use for S3 paths:
 #   s3://bucket/runs/<RUN_ID>/benchmark-results/...
@@ -10,14 +10,16 @@ set -euo pipefail
 #   s3://bucket/runs/<RUN_ID>/data-integrity/...
 #   s3://bucket/runs/<RUN_ID>/data/<engine>/<instance-id>/data.tar.gz
 #
-# Parquet runs first, Lucene runs second.
-# Both run sequentially — OSB does not allow two instances on the same machine.
+# Parquet runs first, then Lucene, then ParquetLucene.
+# All run sequentially — OSB does not allow two instances on the same machine.
 #
 # Reads config from ~/.opensearch-env:
 #   PARQUET_HOST              — Parquet OpenSearch private IP or ALB DNS
-#   LUCENE_HOST                  — Lucene OpenSearch private IP or ALB DNS (empty if disabled)
+#   LUCENE_HOST               — Lucene OpenSearch private IP or ALB DNS (empty if disabled)
+#   PARQUET_LUCENE_HOST       — ParquetLucene OpenSearch private IP (empty if disabled)
 #   WORKLOAD_PATH_PARQUET     — Path to parquet clickbench workload
-#   WORKLOAD_PATH_LUCENE         — Path to upstream clickbench workload
+#   WORKLOAD_PATH_LUCENE      — Path to upstream clickbench workload
+#   WORKLOAD_PATH_PARQUET_LUCENE — Path to parquetLucene clickbench workload
 #
 # Usage: Called automatically by user-data, or manually:
 #   bash run-all.sh
@@ -39,7 +41,8 @@ echo "============================================"
 echo "  OpenSearch Test Automation"
 echo "  Run ID:          ${RUN_ID}"
 echo "  Lucene host:     ${LUCENE_HOST:-not enabled} (DSL queries)"
-echo "  Parquet host: ${PARQUET_HOST} (PPL queries)"
+echo "  Parquet host:    ${PARQUET_HOST} (PPL queries)"
+echo "  ParquetLucene:   ${PARQUET_LUCENE_HOST:-not enabled} (PPL queries, indexed_parquet)"
 echo "  S3 prefix:       s3://${S3_BUCKET}/runs/${RUN_ID}/"
 echo "============================================"
 
@@ -54,7 +57,7 @@ aws s3 rm "s3://${S3_BUCKET}/flags/BENCHMARK_COMPLETE" 2>/dev/null || true
 
 # --- Run benchmarks + correctness sequentially ---
 # OSB does not allow two instances on the same machine.
-# Parquet runs first, then Lucene.
+# Parquet runs first, then Lucene, then ParquetLucene.
 
 echo ""
 echo ">>> Running Parquet benchmark (PPL queries)..."
@@ -86,6 +89,23 @@ else
   echo "Lucene instance not enabled, skipping."
 fi
 
+if [ -n "${PARQUET_LUCENE_HOST:-}" ]; then
+  echo ""
+  echo ">>> Running ParquetLucene benchmark (PPL queries, indexed_parquet)..."
+  bash "$REPO_DIR/benchmark/run-benchmark.sh" \
+    --host "$PARQUET_LUCENE_HOST" \
+    --engine parquetLucene \
+    --workload "$WORKLOAD_PATH_PARQUET_LUCENE" \
+    2>&1 | tee "$HOME/benchmark-parquetLucene.log"
+
+  echo ""
+  echo ">>> Running ParquetLucene correctness test..."
+  bash "$REPO_DIR/correctness/run-parquet-correctness-test.sh" "$PARQUET_LUCENE_HOST" "parquetLucene" \
+    2>&1 | tee "$HOME/correctness-parquetLucene.log"
+else
+  echo "ParquetLucene instance not enabled, skipping."
+fi
+
 echo ""
 echo "============================================"
 echo "  All tests complete!"
@@ -103,16 +123,29 @@ else
   echo "Lucene not enabled, skipping field integrity check."
 fi
 
+if [ -n "${LUCENE_HOST:-}" ] && [ -n "${PARQUET_LUCENE_HOST:-}" ]; then
+  echo ""
+  echo ">>> Running field integrity check (Lucene vs ParquetLucene)..."
+  bash "$REPO_DIR/data-integrity/check-field-integrity.sh" "$LUCENE_HOST" "$PARQUET_LUCENE_HOST" \
+    2>&1 | tee "$HOME/field-integrity-parquetLucene.log"
+fi
+
 # --- Generate comparison visualization ---
 echo ""
 echo ">>> Generating benchmark comparison dashboard..."
 PQ_CSV=$(ls -t "$HOME/benchmark-results/parquet/"*.csv 2>/dev/null | head -1)
 LU_CSV=$(ls -t "$HOME/benchmark-results/lucene/"*.csv 2>/dev/null | head -1)
+PQL_CSV=$(ls -t "$HOME/benchmark-results/parquetLucene/"*.csv 2>/dev/null | head -1)
 
 if [ -n "$PQ_CSV" ] && [ -n "$LU_CSV" ]; then
+  EXTRA_ARGS=""
+  if [ -n "$PQL_CSV" ]; then
+    EXTRA_ARGS="--parquet-lucene-csv $PQL_CSV"
+  fi
   python3 "$REPO_DIR/visualization/generate-comparison.py" \
     --parquet-csv "$PQ_CSV" \
     --lucene-csv "$LU_CSV" \
+    $EXTRA_ARGS \
     --output "$HOME/benchmark-comparison.html" \
     --run-id "$RUN_ID" \
     2>&1 | tee "$HOME/visualization.log"

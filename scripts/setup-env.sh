@@ -335,8 +335,10 @@ S3_BUCKET=$S3_BUCKET
 # BENCHMARK_ENABLED=true
 # BENCHMARK_INSTANCE_TYPE=m7g.medium
 # BENCHMARK_EBS_SIZE_GB=500
-# WORKLOAD_REPO=https://github.com/HarishNarasimhanK/opensearch-benchmark-workloads.git
-# WORKLOAD_BRANCH=main
+# PARQUET_WORKLOAD_REPO=https://github.com/HarishNarasimhanK/opensearch-benchmark-workloads.git
+# PARQUET_WORKLOAD_BRANCH=parquet
+# PARQUET_LUCENE_WORKLOAD_REPO=https://github.com/HarishNarasimhanK/opensearch-benchmark-workloads.git
+# PARQUET_LUCENE_WORKLOAD_BRANCH=indexed_parquet
 
 # Lucene OpenSearch config (defaults — override as needed)
 # LUCENE_ENABLED=true

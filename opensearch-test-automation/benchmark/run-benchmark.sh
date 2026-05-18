@@ -8,6 +8,7 @@ set -euo pipefail
 #   bash run-benchmark.sh --host <ip> --engine <name> --workload <path>
 #   bash run-benchmark.sh --host 172.31.85.56 --engine parquet --workload ~/parquet-workloads/clickbench
 #   bash run-benchmark.sh --host 172.31.81.86 --engine lucene --workload ~/lucene-workloads/clickbench
+#   bash run-benchmark.sh --host 172.31.89.187 --engine parquetLucene --workload ~/parquetLucene-workloads/clickbench
 #
 # Reads defaults from ~/.opensearch-env if args not provided.
 # =============================================================================
@@ -43,8 +44,8 @@ RUN_ID="${RUN_ID:-run-$(date +%Y%m%d_%H%M%S)}"
 BENCHMARK_ID="${RUN_ID}-${ENGINE}"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 # Parquet sandbox only supports single shard; Lucene uses 1 shard per data node
-# Parquet/Parquet needs ~50 bulk clients for CPU saturation; Lucene needs ~8
-if [ "$ENGINE" = "parquet" ]; then
+# Parquet/ParquetLucene needs ~50 bulk clients for CPU saturation; Lucene needs ~8
+if [ "$ENGINE" = "parquet" ] || [ "$ENGINE" = "parquetLucene" ]; then
   NUM_SHARDS=1
   BULK_CLIENTS=50
 else
@@ -90,6 +91,8 @@ done
 
 # --- Select test procedure based on engine ---
 if [ "$ENGINE" = "parquet" ]; then
+  TEST_PROCEDURE="datafusion-ppl"
+elif [ "$ENGINE" = "parquetLucene" ]; then
   TEST_PROCEDURE="datafusion-ppl"
 elif [ "$ENGINE" = "lucene" ]; then
   TEST_PROCEDURE="dsl-clickbench"

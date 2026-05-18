@@ -5,9 +5,9 @@ set -euo pipefail
 # run-correctness-test.sh — Runs all 43 PPL queries and captures raw responses
 #
 # Usage:
-#   bash correctness/run-correctness-test.sh <host> <engine-name>
-#   bash correctness/run-correctness-test.sh 172.31.85.56 parquet
-#   bash correctness/run-correctness-test.sh 172.31.81.86 lucene
+#   bash correctness/run-parquet-correctness-test.sh <host> <engine-name>
+#   bash correctness/run-parquet-correctness-test.sh 172.31.85.56 parquet
+#   bash correctness/run-parquet-correctness-test.sh 172.31.89.187 parquetLucene
 #
 # Reads S3_BUCKET from ~/.opensearch-env
 # =============================================================================
@@ -148,7 +148,7 @@ for name in "${QUERY_NAMES[@]}"; do
   query="${QUERIES[$name]}"
   echo -n "  Running ${name} (${COUNT}/${TOTAL})... "
 
-  response=$(curl -s --max-time 60 -X POST "http://${OS_HOST}:9200/_analytics/ppl" \
+  response=$(curl -s --max-time 60 -X POST "http://${OS_HOST}:9200/_plugins/_ppl" \
     -H 'Content-Type: application/json' \
     -d "{\"query\": \"${query}\"}" 2>&1) || response="{\"error\": \"curl failed or timed out\"}"
 

@@ -1,11 +1,12 @@
 # OpenSearch Performance & Correctness Test Infrastructure
 
-One-command CDK stack that provisions EC2 instances to benchmark and compare the Parquet analytics engine against vanilla Lucene OpenSearch. Supports both single-node and multi-node cluster modes.
+One-command CDK stack that provisions EC2 instances to benchmark and compare three OpenSearch engine configurations: Parquet (DataFusion PPL), Lucene (vanilla DSL), and ParquetLucene (indexed parquet with lucene secondary). Supports both single-node and multi-node cluster modes.
 
-- **Builder Instance** — builds both Parquet (sandbox + 7 plugins + Rust native lib) and Lucene (vanilla) from source, uploads tar.gz to S3, then shuts down
-- **Parquet OpenSearch** — downloads pre-built distribution from S3, runs with PPL queries via `/_plugins/_ppl`
-- **Lucene OpenSearch** — downloads pre-built distribution from S3, runs with DSL queries via `/_search`
-- **Benchmark Runner** — runs OSB benchmarks, correctness tests, field integrity checks, and coordinates data uploads to S3
+- **Builder Instance** — builds both Parquet (sandbox + plugins + Rust native lib) and Lucene (vanilla) from source, uploads tar.gz to S3
+- **Parquet OpenSearch** — pure parquet storage, PPL queries via DataFusion (`/_plugins/_ppl`)
+- **Lucene OpenSearch** — vanilla OpenSearch, DSL queries via `/_search`
+- **ParquetLucene OpenSearch** — parquet primary + lucene secondary, PPL queries via DataFusion
+- **Benchmark Runner** — runs OSB benchmarks, correctness tests, field integrity checks, generates comparison dashboard, coordinates data uploads to S3
 
 ---
 
@@ -71,50 +72,103 @@ npx cdk destroy --force
 
 ### Single-node mode (`npx cdk deploy`)
 
-| Instance | Type | What it does |
-|---|---|---|
-| Builder | `r7g.2xlarge` | Builds both engines, uploads tar.gz to S3, shuts down |
-| Parquet | `r7g.2xlarge` | Downloads tar.gz, runs OpenSearch with sandbox plugins (PPL via `/_plugins/_ppl`) |
-| Lucene | `r7g.2xlarge` | Downloads tar.gz, runs vanilla OpenSearch (DSL via `/_search`) |
-| Benchmark | `m7g.medium` | Runs OSB benchmarks, correctness, field integrity, generates comparison dashboard, signals data upload |
+| Instance | Type | JVM Heap | What it does |
+|---|---|---|---|
+| Builder | `r8g.2xlarge` | — | Builds both engines, uploads tar.gz to S3 |
+| Parquet | `r8g.2xlarge` | 16g | Pure parquet storage, PPL queries via DataFusion |
+| Lucene | `r8g.2xlarge` | 24g | Vanilla OpenSearch, DSL queries |
+| ParquetLucene | `r8g.2xlarge` | 16g | Parquet + lucene secondary, PPL queries |
+| Benchmark | `r8g.8xlarge` | — | Runs OSB, correctness, visualization, signals data upload |
 
 ### Multi-node mode (`npx cdk deploy -c clusterMode=multi -c dataNodeCount=3`)
 
-Per engine: 3 cluster managers + N data nodes + internal ALB. Uses EC2 tag-based discovery. Each engine has its own cluster tag.
+Per engine: 3 cluster managers + N data nodes + internal ALB. Uses EC2 tag-based discovery.
 
 ---
 
-## CLI Flags
+## Configuration (`-c` Context Flags)
 
-| Flag | Default | Description |
-|---|---|---|
-| `-c clusterMode=multi` | `single` | Enable multi-node cluster mode |
-| `-c dataNodeCount=3` | `3` | Number of data nodes per engine (multi-node only) |
-| `-c parquetBranch=<branch>` | `main` | Parquet OpenSearch branch |
-| `-c parquetRepo=<url>` | `opensearch-project/OpenSearch` | Parquet OpenSearch repo |
-| `-c luceneBranch=<branch>` | `main` | Lucene OpenSearch branch |
-| `-c luceneRepo=<url>` | `opensearch-project/OpenSearch` | Lucene OpenSearch repo |
-| `-c parquetWorkloadRepo=<url>` | `HarishNarasimhanK/opensearch-benchmark-workloads` | OSB benchmark workloads repo for Parquet engine |
-| `-c parquetWorkloadBranch=<branch>` | `nightly` | Parquet workloads branch |
-| `-c luceneWorkloadRepo=<url>` | `opensearch-project/opensearch-benchmark-workloads` | OSB benchmark workloads repo for Lucene engine |
-| `-c luceneWorkloadBranch=<branch>` | `main` | Lucene workloads branch |
-| `-c testIterations=<N>` | `20` | Number of query iterations per benchmark run (higher = better percentile data) |
-| `-c ingestPercentage=<N>` | `0.001` | Fraction of ClickBench dataset to ingest (0.001 = ~1000 docs, 1 = full 100M) |
-| `-c benchmarkEnabled=false` | `true` | Set to `false` to skip benchmark instance — deploys only Builder + Parquet + Lucene OpenSearch. Users bring their own benchmark setup. CloudWatch metrics, logs, vmstat, and async-profiler still run on the OpenSearch instances. |
+All settings are overridable via `cdk deploy -c key=value`. They can also be set as environment variables or in `.env`.
+
+### Parquet Engine
+
+| Flag | Env Var | Default | Description |
+|---|---|---|---|
+| `-c parquetRepo` | `PARQUET_REPO` | `opensearch-project/OpenSearch` | Git repo URL |
+| `-c parquetBranch` | `PARQUET_BRANCH` | `main` | Branch to build |
+| `-c parquetInstanceType` | `PARQUET_INSTANCE_TYPE` | `r8g.2xlarge` | EC2 instance type |
+| `-c parquetEbsSizeGb` | `PARQUET_EBS_SIZE_GB` | `1000` | EBS volume size (GB) |
+| `-c parquetEbsIops` | `PARQUET_EBS_IOPS` | `12000` | EBS provisioned IOPS |
+| `-c parquetEbsThroughput` | `PARQUET_EBS_THROUGHPUT` | `500` | EBS throughput (MB/s) |
+| `-c parquetJvmHeap` | `PARQUET_JVM_HEAP` | `16g` | JVM heap size |
+| `-c parquetWorkloadRepo` | `PARQUET_WORKLOAD_REPO` | `HarishNarasimhanK/opensearch-benchmark-workloads` | OSB workload repo |
+| `-c parquetWorkloadBranch` | `PARQUET_WORKLOAD_BRANCH` | `parquet` | Workload branch |
+
+### Lucene Engine
+
+| Flag | Env Var | Default | Description |
+|---|---|---|---|
+| `-c luceneEnabled` | `LUCENE_ENABLED` | `true` | Enable/disable Lucene |
+| `-c luceneRepo` | `LUCENE_REPO` | `opensearch-project/OpenSearch` | Git repo URL |
+| `-c luceneBranch` | `LUCENE_BRANCH` | `main` | Branch to build |
+| `-c luceneInstanceType` | `LUCENE_INSTANCE_TYPE` | `r8g.2xlarge` | EC2 instance type |
+| `-c luceneEbsSizeGb` | `LUCENE_EBS_SIZE_GB` | `1000` | EBS volume size (GB) |
+| `-c luceneEbsIops` | `LUCENE_EBS_IOPS` | `12000` | EBS provisioned IOPS |
+| `-c luceneEbsThroughput` | `LUCENE_EBS_THROUGHPUT` | `500` | EBS throughput (MB/s) |
+| `-c luceneJvmHeap` | `LUCENE_JVM_HEAP` | `24g` | JVM heap size |
+| `-c luceneWorkloadRepo` | `LUCENE_WORKLOAD_REPO` | `opensearch-project/opensearch-benchmark-workloads` | OSB workload repo |
+| `-c luceneWorkloadBranch` | `LUCENE_WORKLOAD_BRANCH` | `main` | Workload branch |
+
+### ParquetLucene Engine
+
+| Flag | Env Var | Default | Description |
+|---|---|---|---|
+| `-c parquetLuceneEnabled` | `PARQUET_LUCENE_ENABLED` | `true` | Enable/disable ParquetLucene |
+| `-c parquetLuceneInstanceType` | `PARQUET_LUCENE_INSTANCE_TYPE` | `r8g.2xlarge` | EC2 instance type |
+| `-c parquetLuceneEbsSizeGb` | `PARQUET_LUCENE_EBS_SIZE_GB` | `1000` | EBS volume size (GB) |
+| `-c parquetLuceneEbsIops` | `PARQUET_LUCENE_EBS_IOPS` | `12000` | EBS provisioned IOPS |
+| `-c parquetLuceneEbsThroughput` | `PARQUET_LUCENE_EBS_THROUGHPUT` | `500` | EBS throughput (MB/s) |
+| `-c parquetLuceneJvmHeap` | `PARQUET_LUCENE_JVM_HEAP` | `16g` | JVM heap size |
+| `-c parquetLuceneWorkloadRepo` | `PARQUET_LUCENE_WORKLOAD_REPO` | `HarishNarasimhanK/opensearch-benchmark-workloads` | OSB workload repo |
+| `-c parquetLuceneWorkloadBranch` | `PARQUET_LUCENE_WORKLOAD_BRANCH` | `indexed_parquet` | Workload branch |
+
+### Benchmark Instance
+
+| Flag | Env Var | Default | Description |
+|---|---|---|---|
+| `-c benchmarkEnabled` | `BENCHMARK_ENABLED` | `true` | Enable/disable benchmark |
+| `-c benchmarkInstanceType` | `BENCHMARK_INSTANCE_TYPE` | `r8g.8xlarge` | EC2 instance type |
+| `-c benchmarkEbsSizeGb` | `BENCHMARK_EBS_SIZE_GB` | `500` | EBS volume size (GB) |
+| `-c benchmarkEbsIops` | `BENCHMARK_EBS_IOPS` | `12000` | EBS provisioned IOPS |
+| `-c benchmarkEbsThroughput` | `BENCHMARK_EBS_THROUGHPUT` | `500` | EBS throughput (MB/s) |
+| `-c testIterations` | `TEST_ITERATIONS` | `100` | Query iterations per benchmark |
+| `-c ingestPercentage` | `INGEST_PERCENTAGE` | `0.001` | ClickBench ingest fraction (100 = full dataset) |
+
+### Cluster & General
+
+| Flag | Env Var | Default | Description |
+|---|---|---|---|
+| `-c clusterMode` | `CLUSTER_MODE` | `single` | `single` or `multi` |
+| `-c dataNodeCount` | `DATA_NODE_COUNT` | `3` | Data nodes per engine (multi-node only) |
+| `-c s3Bucket` | `S3_BUCKET` | `opensearch-codeguru` | S3 bucket for builds/results |
+| `-c runIdPrefix` | `RUN_ID_PREFIX` | (empty) | Prefix for run IDs (e.g., `nightly`) |
 
 ---
 
 ## .env Variables
 
-Auto-generated by `setup-env.sh`. Key variables:
+Auto-generated by `setup-env.sh`. These are networking/credentials that can't be passed via `-c` flags:
 
-| Variable | Default | Description |
-|---|---|---|
-| `INSTANCE_TYPE` | `r7g.2xlarge` | OpenSearch instance type (must be ARM64) |
-| `JVM_HEAP` | `8g` | JVM heap size |
-| `LUCENE_ENABLED` | `true` | Set to `false` to skip Lucene |
-| `BENCHMARK_ENABLED` | `true` | Set to `false` to skip benchmark |
-| `METRICS_STORE_HOST` | (empty) | Optional AOS domain for OSB telemetry persistence |
+| Variable | Description |
+|---|---|
+| `CDK_ACCOUNT` | AWS account ID |
+| `CDK_REGION` | AWS region |
+| `VPC_ID` | VPC to deploy into |
+| `SUBNET_ID` | Subnet for instances |
+| `SUBNET_AZ` | Availability zone |
+| `SECURITY_GROUP_ID` | Security group |
+| `KEY_PAIR_NAME` | SSH key pair name |
+| `METRICS_STORE_HOST` | Optional AOS domain for OSB telemetry persistence |
 
 ---
 
@@ -123,13 +177,15 @@ Auto-generated by `setup-env.sh`. Key variables:
 Each deploy runs the following pipeline automatically (orchestrated by `run-all.sh`):
 
 1. **Generate Run ID** — `run-YYYYMMDD_HHMMSS`
-2. **Parquet benchmark** — OSB with `datafusion-ppl` test procedure
-3. **Parquet correctness** — PPL query pass/fail per query
-4. **Lucene benchmark** — OSB with `dsl-clickbench` test procedure
+2. **Parquet benchmark** — OSB with `datafusion-ppl` test procedure (PPL queries)
+3. **Parquet correctness** — 43 PPL queries, pass/fail per query
+4. **Lucene benchmark** — OSB with `dsl-clickbench` test procedure (DSL queries)
 5. **Lucene correctness** — DSL query pass/fail per query
-6. **Field integrity check** — compares total count and null count per field between Lucene (DSL) and Parquet (PPL)
-7. **Comparison dashboard** — generates HTML with 4 Plotly charts comparing both engines
-8. **Signal data upload** — data nodes upload their data folders to S3
+6. **ParquetLucene benchmark** — OSB with `datafusion-ppl` test procedure (PPL queries, indexed_parquet)
+7. **ParquetLucene correctness** — 43 PPL queries, pass/fail per query
+8. **Field integrity check** — compares total count and null count per field between engines
+9. **Comparison dashboard** — generates HTML with 5 Plotly charts comparing all engines
+10. **Signal data upload** — data nodes upload their data folders to S3
 
 All results go to `s3://bucket/runs/<RUN_ID>/`.
 
@@ -156,11 +212,15 @@ All results go to `s3://bucket/runs/<RUN_ID>/`.
 | `/opensearch/builder/user-data` | Builder instance build progress |
 | `/opensearch/parquet/user-data` | Parquet setup progress |
 | `/opensearch/parquet/runtime` | Parquet OpenSearch runtime logs |
+| `/opensearch/parquet/vmstat` | Parquet vmstat memory stats |
 | `/opensearch/lucene/user-data` | Lucene setup progress |
 | `/opensearch/lucene/runtime` | Lucene OpenSearch runtime logs |
+| `/opensearch/lucene/vmstat` | Lucene vmstat memory stats |
+| `/opensearch/parquetLucene/user-data` | ParquetLucene setup progress |
+| `/opensearch/parquetLucene/runtime` | ParquetLucene OpenSearch runtime logs |
+| `/opensearch/parquetLucene/vmstat` | ParquetLucene vmstat memory stats |
 | `/opensearch/benchmark/user-data` | Benchmark setup progress |
 | `/opensearch/benchmark/run` | Full orchestrator output (run-all.sh) |
 | `/opensearch/benchmark/parquet` | Parquet benchmark output |
 | `/opensearch/benchmark/lucene` | Lucene benchmark output |
-| `/opensearch/parquet/vmstat` | Parquet vmstat memory stats (free/buff/cache per second) |
-| `/opensearch/lucene/vmstat` | Lucene vmstat memory stats (free/buff/cache per second) |
+| `/opensearch/benchmark/parquetLucene` | ParquetLucene benchmark output |
