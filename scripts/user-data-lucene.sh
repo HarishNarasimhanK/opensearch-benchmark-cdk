@@ -70,7 +70,8 @@ cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json << 'CWCO
           { "file_path": "/home/ec2-user/lucene-opensearch-run.log", "log_group_name": "{{LOG_GROUP_PREFIX}}/lucene/runtime", "log_stream_name": "{{RUN_ID}}/{instance_id}-{{NODE_NAME}}" },
           { "file_path": "/home/ec2-user/upload-data.log", "log_group_name": "{{LOG_GROUP_PREFIX}}/lucene/upload-data", "log_stream_name": "{{RUN_ID}}/{instance_id}-{{NODE_NAME}}" },
           { "file_path": "/home/ec2-user/profile-cron.log", "log_group_name": "{{LOG_GROUP_PREFIX}}/lucene/profiler", "log_stream_name": "{{RUN_ID}}/{instance_id}-{{NODE_NAME}}" },
-          { "file_path": "/home/ec2-user/vmstat.log", "log_group_name": "{{LOG_GROUP_PREFIX}}/lucene/vmstat", "log_stream_name": "{{RUN_ID}}/{instance_id}-{{NODE_NAME}}" }
+          { "file_path": "/home/ec2-user/vmstat.log", "log_group_name": "{{LOG_GROUP_PREFIX}}/lucene/vmstat", "log_stream_name": "{{RUN_ID}}/{instance_id}-{{NODE_NAME}}" },
+          { "file_path": "/home/ec2-user/node-stats.log", "log_group_name": "{{LOG_GROUP_PREFIX}}/lucene/node-stats", "log_stream_name": "{{RUN_ID}}/{instance_id}-{{NODE_NAME}}" }
         ]
       }
     }
@@ -149,7 +150,8 @@ echo '*/3 * * * * /home/ec2-user/opensearch-test-automation/profiler/profile-ope
 cat > /etc/logrotate.d/opensearch-profiler << 'LOGROTATE'
 /home/ec2-user/lucene-opensearch-run.log
 /home/ec2-user/profile-cron.log
-/home/ec2-user/vmstat.log {
+/home/ec2-user/vmstat.log
+/home/ec2-user/node-stats.log {
     size 100M
     rotate 5
     compress
@@ -169,6 +171,21 @@ echo "OpenSearch started! Waiting for it to be ready..."
 yum install -y screen
 su -l ec2-user -c 'screen -dmS vmstat bash -c "vmstat 1 | awk '\''NR>2 && \$4+0==\$4 {print strftime(\"%Y-%m-%dT%H:%M:%SZ\",systime()),\"free:\"\$4,\"buff:\"\$5,\"cache:\"\$6; fflush()}'\'' | tee -a /home/ec2-user/vmstat.log"'
 echo "vmstat logging started in background (screen session: vmstat)"
+
+# --- Step 10c: Start node-stats logging (OpenSearch metrics every 10s) ---
+cat > /home/ec2-user/collect-node-stats.sh << 'NODESTATS'
+#!/bin/bash
+PRIV_IP=$(hostname -I | awk '{print $1}')
+while true; do
+  curl -s --max-time 5 "http://${PRIV_IP}:9200/_nodes/stats" 2>/dev/null >> /home/ec2-user/node-stats.log
+  echo "" >> /home/ec2-user/node-stats.log
+  sleep 10
+done
+NODESTATS
+chmod +x /home/ec2-user/collect-node-stats.sh
+chown ec2-user:ec2-user /home/ec2-user/collect-node-stats.sh
+su -l ec2-user -c 'screen -dmS nodestats bash -c "/home/ec2-user/collect-node-stats.sh"'
+echo "node-stats logging started in background (screen session: nodestats)"
 
 # --- Step 11: Background poller — uploads data folder to S3 after benchmark completes ---
 su -l ec2-user -c 'nohup bash /home/ec2-user/opensearch-test-automation/data-upload/upload-data-on-complete.sh > /home/ec2-user/upload-data.log 2>&1 &'

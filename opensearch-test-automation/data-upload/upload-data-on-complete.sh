@@ -83,6 +83,22 @@ while true; do
       sleep 30
     done
 
+    # --- Upload node-stats.log to S3 ---
+    if [ -f "$HOME/node-stats.log" ] && [ -s "$HOME/node-stats.log" ]; then
+      echo "Uploading node-stats.log to S3..."
+      aws s3 cp "$HOME/node-stats.log" \
+        "s3://${S3_BUCKET}/runs/${RUN_ID}/node-stats/${ENGINE}/${INSTANCE_LABEL}/node-stats.log"
+      echo "✅ node-stats.log uploaded"
+    fi
+
+    # --- Upload vmstat.log to S3 ---
+    if [ -f "$HOME/vmstat.log" ] && [ -s "$HOME/vmstat.log" ]; then
+      echo "Uploading vmstat.log to S3..."
+      aws s3 cp "$HOME/vmstat.log" \
+        "s3://${S3_BUCKET}/runs/${RUN_ID}/node-stats/${ENGINE}/${INSTANCE_LABEL}/vmstat.log"
+      echo "✅ vmstat.log uploaded"
+    fi
+
     # --- Wait 30 min for segment merges to complete ---
     echo "Waiting 30 minutes for segment merges to complete..."
     sleep 1800

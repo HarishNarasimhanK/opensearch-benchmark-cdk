@@ -58,7 +58,7 @@ const luceneInstanceType = ctx("luceneInstanceType", "LUCENE_INSTANCE_TYPE", "r8
 const luceneEbsSizeGb = parseInt(ctx("luceneEbsSizeGb", "LUCENE_EBS_SIZE_GB", "1000"), 10);
 const luceneEbsIops = parseInt(ctx("luceneEbsIops", "LUCENE_EBS_IOPS", "12000"), 10);
 const luceneEbsThroughput = parseInt(ctx("luceneEbsThroughput", "LUCENE_EBS_THROUGHPUT", "500"), 10);
-const luceneJvmHeap = ctx("luceneJvmHeap", "LUCENE_JVM_HEAP", "24g");
+const luceneJvmHeap = ctx("luceneJvmHeap", "LUCENE_JVM_HEAP", "32g");
 const luceneWorkloadRepo = ctx("luceneWorkloadRepo", "LUCENE_WORKLOAD_REPO", "https://github.com/opensearch-project/opensearch-benchmark-workloads.git");
 const luceneWorkloadBranch = ctx("luceneWorkloadBranch", "LUCENE_WORKLOAD_BRANCH", "main");
 

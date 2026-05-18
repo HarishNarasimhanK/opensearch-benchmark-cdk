@@ -165,13 +165,14 @@ for name in "${QUERY_NAMES[@]}"; do
   comma=""
   if [ $COUNT -lt $TOTAL ]; then comma=","; fi
 
-  python3 -c "
+  echo "$response" | python3 -c "
 import json, sys
-name, query, status, response, comma = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
+name, query, status, comma = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+response = sys.stdin.read()
 try: resp = json.loads(response)
-except: resp = {'raw': response}
+except: resp = {'raw': response[:1000]}
 print('    ' + json.dumps({'name': name, 'query': query, 'status': status, 'response': resp}) + comma)
-" "$name" "$query" "$status" "$response" "$comma" >> "$OUTPUT_FILE"
+" "$name" "$query" "$status" "$comma" >> "$OUTPUT_FILE"
 done
 
 echo "  ]" >> "$OUTPUT_FILE"
