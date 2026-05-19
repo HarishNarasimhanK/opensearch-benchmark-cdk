@@ -1,0 +1,2 @@
+#!/bin/bash
+open "$(dirname "$0")/scripts/launch-ui.html" 2>/dev/null || xdg-open "$(dirname "$0")/scripts/launch-ui.html" 2>/dev/null || echo "Open this in your browser: $(dirname "$0")/scripts/launch-ui.html"

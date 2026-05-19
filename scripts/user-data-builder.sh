@@ -30,7 +30,7 @@ yum install -y java-21-amazon-corretto-devel
 
 # JDK 25 for Parquet (user-level, sandbox requires 25+)
 echo "=== Installing JDK 25 (Corretto) ==="
-su -l ec2-user -c 'wget -q "https://corretto.aws/downloads/resources/25.0.3.9.1/amazon-corretto-25.0.3.9.1-linux-aarch64.tar.gz" -O /tmp/corretto25.tar.gz && tar xzf /tmp/corretto25.tar.gz -C $HOME && rm /tmp/corretto25.tar.gz'
+su -l ec2-user -c 'wget -q "https://corretto.aws/downloads/latest/amazon-corretto-25-aarch64-linux-jdk.tar.gz" -O /tmp/corretto25.tar.gz && tar xzf /tmp/corretto25.tar.gz -C $HOME && rm /tmp/corretto25.tar.gz'
 
 # Rust for Parquet native lib
 echo "=== Installing Rust ==="
@@ -63,7 +63,7 @@ echo "============================================"
 # All Parquet build steps run as ec2-user with JDK 25 + Rust on PATH
 su -l ec2-user -c '
 set -exo pipefail
-export JAVA_HOME=$HOME/amazon-corretto-25.0.3.9.1-linux-aarch64
+export JAVA_HOME=$(ls -d $HOME/amazon-corretto-25* | head -1)
 export PATH=$JAVA_HOME/bin:$HOME/.cargo/bin:$PATH
 
 SRC=$HOME/parquet-opensearch-src

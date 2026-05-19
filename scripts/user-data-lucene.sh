@@ -24,11 +24,20 @@ sysctl -w vm.max_map_count=262144
 echo 'vm.max_map_count=262144' >> /etc/sysctl.conf
 
 # --- Step 2: Start CloudWatch agent early ---
+# Pre-create log files WITH initial content and correct permissions.
+# CW agent (runs as cwagent) needs: file exists + readable + non-empty.
+# Also make home dir traversable by cwagent user.
+chmod 755 /home/ec2-user
+for f in lucene-opensearch-run.log upload-data.log profile-cron.log vmstat.log node-stats.log; do
+  echo "[init] Log file created at $(date -u +%Y-%m-%dT%H:%M:%SZ)" > /home/ec2-user/$f
+  chown ec2-user:ec2-user /home/ec2-user/$f
+  chmod 644 /home/ec2-user/$f
+done
+
 cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json << 'CWCONFIG'
 {
   "agent": {
-    "metrics_collection_interval": 10,
-    "run_as_user": "cwagent"
+    "metrics_collection_interval": 10
   },
   "metrics": {
     "namespace": "OpenSearch/{{RUN_ID}}",

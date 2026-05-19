@@ -29,20 +29,30 @@ echo "Instance ID: $INSTANCE_ID"
 
 # JDK 25 required for sandbox Parquet (JDK 21 is not sufficient)
 echo "=== Installing JDK 25 (Corretto) ==="
-su -l ec2-user -c 'wget -q "https://corretto.aws/downloads/resources/25.0.3.9.1/amazon-corretto-25.0.3.9.1-linux-aarch64.tar.gz" -O /tmp/corretto25.tar.gz && tar xzf /tmp/corretto25.tar.gz -C $HOME && rm /tmp/corretto25.tar.gz'
-echo 'export JAVA_HOME=$HOME/amazon-corretto-25.0.3.9.1-linux-aarch64' >> /home/ec2-user/.bashrc
-echo 'export PATH=$JAVA_HOME/bin:$PATH' >> /home/ec2-user/.bashrc
+su -l ec2-user -c 'wget -q "https://corretto.aws/downloads/latest/amazon-corretto-25-aarch64-linux-jdk.tar.gz" -O /tmp/corretto25.tar.gz && tar xzf /tmp/corretto25.tar.gz -C $HOME && rm /tmp/corretto25.tar.gz'
+CORRETTO25_DIR=$(ls -d /home/ec2-user/amazon-corretto-25* | head -1)
+echo "export JAVA_HOME=$CORRETTO25_DIR" >> /home/ec2-user/.bashrc
+echo "export PATH=\$JAVA_HOME/bin:\$PATH" >> /home/ec2-user/.bashrc
 
 yum install -y cronie amazon-cloudwatch-agent
 sysctl -w vm.max_map_count=262144
 echo 'vm.max_map_count=262144' >> /etc/sysctl.conf
 
 # --- Step 2: Start CloudWatch agent early ---
+# Pre-create log files WITH initial content and correct permissions.
+# CW agent (runs as cwagent) needs: file exists + readable + non-empty.
+# Also make home dir traversable by cwagent user.
+chmod 755 /home/ec2-user
+for f in parquet-opensearch-run.log upload-data.log profile-cron.log vmstat.log node-stats.log; do
+  echo "[init] Log file created at $(date -u +%Y-%m-%dT%H:%M:%SZ)" > /home/ec2-user/$f
+  chown ec2-user:ec2-user /home/ec2-user/$f
+  chmod 644 /home/ec2-user/$f
+done
+
 cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json << 'CWCONFIG'
 {
   "agent": {
-    "metrics_collection_interval": 10,
-    "run_as_user": "cwagent"
+    "metrics_collection_interval": 10
   },
   "metrics": {
     "namespace": "OpenSearch/{{RUN_ID}}",
@@ -185,7 +195,7 @@ LOGROTATE
 #   -Dio.netty.* flags → Arrow/Flight memory allocator needs Netty unsafe access on JDK 25
 #   --add-opens / --enable-native-access → required for Arrow direct memory on JDK 25
 su -l ec2-user -c '
-export JAVA_HOME=$HOME/amazon-corretto-25.0.3.9.1-linux-aarch64
+export JAVA_HOME=$(ls -d $HOME/amazon-corretto-25* | head -1)
 export PATH=$JAVA_HOME/bin:$PATH
 export OPENSEARCH_JAVA_OPTS="-Djava.library.path=$HOME/parquet-opensearch/lib -Dopensearch.experimental.feature.pluggable.dataformat.enabled=true -Dopensearch.experimental.feature.transport.stream.enabled=true -Dopensearch.pluggable.dataformat.merge.enabled=true -Dio.netty.allocator.numDirectArenas=1 -Dio.netty.noUnsafe=false -Dio.netty.tryUnsafe=true -Dio.netty.tryReflectionSetAccessible=true --add-opens=java.base/java.nio=ALL-UNNAMED --enable-native-access=ALL-UNNAMED -XX:+EnableDynamicAgentLoading"
 nohup $HOME/parquet-opensearch/bin/opensearch > $HOME/parquet-opensearch-run.log 2>&1 &

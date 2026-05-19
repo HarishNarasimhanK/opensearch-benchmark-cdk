@@ -203,8 +203,8 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
     const builderInstance = createInstance("BuilderInstance", "BuilderLt", builderScript, parquetInstanceType, parquetEbsSizeGb, parquetEbsIops, parquetEbsThroughput);
     cdk.Tags.of(builderInstance).add("Name", `${id}-Builder-${runId}`);
 
-    new cdk.CfnOutput(this, "A1_BuilderSSH", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${builderInstance.instancePublicDnsName}` });
-    new cdk.CfnOutput(this, "A2_BuilderLog", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${builderInstance.instancePublicDnsName} "tail -f /var/log/user-data.log"` });
+    new cdk.CfnOutput(this, "BuilderSSH", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${builderInstance.instancePublicDnsName}` });
+    new cdk.CfnOutput(this, "BuilderLog", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${builderInstance.instancePublicDnsName} "tail -f /var/log/user-data.log"` });
 
     // =========================================================================
     // Parquet OpenSearch: single-node or multi-node cluster
@@ -215,7 +215,7 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
     if (isMultiNode) {
       // --- Multi-node: 3 managers + N data nodes + internal ALB ---
       const seedManager = createParquetInstance("SeedManager", "SeedManagerLt", "clusterManager-seed", "cluster_manager");
-      new cdk.CfnOutput(this, "B1_SeedManagerSSH", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${seedManager.instancePublicDnsName}` });
+      new cdk.CfnOutput(this, "SeedManagerSSH", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${seedManager.instancePublicDnsName}` });
 
       for (let i = 2; i <= 3; i++) {
         createParquetInstance(`Manager${i}`, `Manager${i}Lt`, `clusterManager-${i}`, "cluster_manager");
@@ -226,7 +226,7 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
         const data = createParquetInstance(`DataNode${i}`, `DataNode${i}Lt`, `dataNode-${i}`, "data, ingest");
         dataInstances.push(data);
         if (i === 1) parquetInstanceId = data.instanceId;  // Use first data node for CloudWatch dashboard
-        new cdk.CfnOutput(this, `B2DataNode${i}SSH`, { value: `ssh -i ~/${keyPairName}.pem ec2-user@${data.instancePublicDnsName}` });
+        new cdk.CfnOutput(this, `ParquetDataNode${i}SSH`, { value: `ssh -i ~/${keyPairName}.pem ec2-user@${data.instancePublicDnsName}` });
       }
 
       // Internal ALB — routes to data nodes on port 9200
@@ -251,8 +251,8 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
 
       parquetEndpoint = alb.loadBalancerDnsName;
 
-      new cdk.CfnOutput(this, "B3_ClusterALBUrl", { value: `http://${alb.loadBalancerDnsName}:9200` });
-      new cdk.CfnOutput(this, "B4_ClusterMode", { value: `multi (3 managers + ${dataNodeCount} data nodes)` });
+      new cdk.CfnOutput(this, "ParquetClusterALBUrl", { value: `http://${alb.loadBalancerDnsName}:9200` });
+      new cdk.CfnOutput(this, "ParquetClusterMode", { value: `multi (3 managers + ${dataNodeCount} data nodes)` });
 
     } else {
       // --- Single-node (default) ---
@@ -260,10 +260,10 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
       parquetEndpoint = instance.instancePrivateIp;
       parquetInstanceId = instance.instanceId;
 
-      new cdk.CfnOutput(this, "B1_ParquetSSH", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${instance.instancePublicDnsName}` });
-      new cdk.CfnOutput(this, "B2_ParquetSetupLog", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${instance.instancePublicDnsName} "tail -f /var/log/user-data.log"` });
-      new cdk.CfnOutput(this, "B3_ParquetRuntimeLog", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${instance.instancePublicDnsName} "tail -f ~/parquet-opensearch-run.log"` });
-      new cdk.CfnOutput(this, "B4_ParquetPrivateIp", { value: instance.instancePrivateIp });
+      new cdk.CfnOutput(this, "ParquetSSH", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${instance.instancePublicDnsName}` });
+      new cdk.CfnOutput(this, "ParquetSetupLog", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${instance.instancePublicDnsName} "tail -f /var/log/user-data.log"` });
+      new cdk.CfnOutput(this, "ParquetRuntimeLog", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${instance.instancePublicDnsName} "tail -f ~/parquet-opensearch-run.log"` });
+      new cdk.CfnOutput(this, "ParquetPrivateIp", { value: instance.instancePrivateIp });
     }
 
     // =========================================================================
@@ -302,7 +302,7 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
       if (isMultiNode) {
         // --- Multi-node: 3 managers + N data nodes + internal ALB ---
         const luceneSeedManager = createLuceneInstance("LuceneSeedManager", "LuceneSeedManagerLt", "clusterManager-seed", "cluster_manager");
-        new cdk.CfnOutput(this, "C1_LuceneSeedManagerSSH", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${luceneSeedManager.instancePublicDnsName}` });
+        new cdk.CfnOutput(this, "LuceneSeedManagerSSH", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${luceneSeedManager.instancePublicDnsName}` });
 
         for (let i = 2; i <= 3; i++) {
           createLuceneInstance(`LuceneManager${i}`, `LuceneManager${i}Lt`, `clusterManager-${i}`, "cluster_manager");
@@ -313,7 +313,7 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
           const data = createLuceneInstance(`LuceneDataNode${i}`, `LuceneDataNode${i}Lt`, `dataNode-${i}`, "data, ingest");
           luceneDataInstances.push(data);
           if (i === 1) luceneInstanceId = data.instanceId;  // Use first data node for CloudWatch dashboard
-          new cdk.CfnOutput(this, `C2LuceneDataNode${i}SSH`, { value: `ssh -i ~/${keyPairName}.pem ec2-user@${data.instancePublicDnsName}` });
+          new cdk.CfnOutput(this, `LuceneDataNode${i}SSH`, { value: `ssh -i ~/${keyPairName}.pem ec2-user@${data.instancePublicDnsName}` });
         }
 
         // Internal ALB for Lucene cluster
@@ -338,8 +338,8 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
 
         luceneEndpoint = luceneAlb.loadBalancerDnsName;
 
-        new cdk.CfnOutput(this, "C3_LuceneClusterALBUrl", { value: `http://${luceneAlb.loadBalancerDnsName}:9200` });
-        new cdk.CfnOutput(this, "C4_LuceneClusterMode", { value: `multi (3 managers + ${dataNodeCount} data nodes)` });
+        new cdk.CfnOutput(this, "LuceneClusterALBUrl", { value: `http://${luceneAlb.loadBalancerDnsName}:9200` });
+        new cdk.CfnOutput(this, "LuceneClusterMode", { value: `multi (3 managers + ${dataNodeCount} data nodes)` });
 
       } else {
         // --- Single-node (default) ---
@@ -347,9 +347,9 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
         luceneEndpoint = luceneInstance.instancePrivateIp;
         luceneInstanceId = luceneInstance.instanceId;
 
-        new cdk.CfnOutput(this, "C1_LuceneSSH", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${luceneInstance.instancePublicDnsName}` });
-        new cdk.CfnOutput(this, "C2_LuceneSetupLog", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${luceneInstance.instancePublicDnsName} "tail -f /var/log/user-data.log"` });
-        new cdk.CfnOutput(this, "C3_LucenePrivateIp", { value: luceneInstance.instancePrivateIp });
+        new cdk.CfnOutput(this, "LuceneSSH", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${luceneInstance.instancePublicDnsName}` });
+        new cdk.CfnOutput(this, "LuceneSetupLog", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${luceneInstance.instancePublicDnsName} "tail -f /var/log/user-data.log"` });
+        new cdk.CfnOutput(this, "LucenePrivateIp", { value: luceneInstance.instancePrivateIp });
       }
     }
 
@@ -381,10 +381,10 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
       parquetLuceneEndpoint = parquetLuceneInstance.instancePrivateIp;
       parquetLuceneInstanceId = parquetLuceneInstance.instanceId;
 
-      new cdk.CfnOutput(this, "D1_ParquetLuceneSSH", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${parquetLuceneInstance.instancePublicDnsName}` });
-      new cdk.CfnOutput(this, "D2_ParquetLuceneSetupLog", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${parquetLuceneInstance.instancePublicDnsName} "tail -f /var/log/user-data.log"` });
-      new cdk.CfnOutput(this, "D3_ParquetLuceneRuntimeLog", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${parquetLuceneInstance.instancePublicDnsName} "tail -f ~/parquetLucene-opensearch-run.log"` });
-      new cdk.CfnOutput(this, "D4_ParquetLucenePrivateIp", { value: parquetLuceneInstance.instancePrivateIp });
+      new cdk.CfnOutput(this, "ParquetLuceneSSH", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${parquetLuceneInstance.instancePublicDnsName}` });
+      new cdk.CfnOutput(this, "ParquetLuceneSetupLog", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${parquetLuceneInstance.instancePublicDnsName} "tail -f /var/log/user-data.log"` });
+      new cdk.CfnOutput(this, "ParquetLuceneRuntimeLog", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${parquetLuceneInstance.instancePublicDnsName} "tail -f ~/parquetLucene-opensearch-run.log"` });
+      new cdk.CfnOutput(this, "ParquetLucenePrivateIp", { value: parquetLuceneInstance.instancePrivateIp });
     }
 
     // =========================================================================
@@ -415,17 +415,17 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
       const benchmarkInstance = createInstance("BenchmarkInstance", "BenchmarkLt", benchmarkScript, benchmarkInstanceType, benchmarkEbsSizeGb, benchmarkEbsIops, benchmarkEbsThroughput);
       cdk.Tags.of(benchmarkInstance).add("Name", `${id}-Benchmark-${runId}`);
 
-      new cdk.CfnOutput(this, "D1_BenchmarkSSH", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${benchmarkInstance.instancePublicDnsName}` });
-      new cdk.CfnOutput(this, "D2_BenchmarkSetupLog", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${benchmarkInstance.instancePublicDnsName} "tail -f /var/log/user-data.log"` });
-      new cdk.CfnOutput(this, "D3_BenchmarkRunLog", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${benchmarkInstance.instancePublicDnsName} "tail -f ~/benchmark-run.log"` });
+      new cdk.CfnOutput(this, "BenchmarkSSH", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${benchmarkInstance.instancePublicDnsName}` });
+      new cdk.CfnOutput(this, "BenchmarkSetupLog", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${benchmarkInstance.instancePublicDnsName} "tail -f /var/log/user-data.log"` });
+      new cdk.CfnOutput(this, "BenchmarkRunLog", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${benchmarkInstance.instancePublicDnsName} "tail -f ~/benchmark-run.log"` });
     }
 
     // =========================================================================
     // Metrics Store
     // =========================================================================
     if (metricsStoreHost && benchmarkEnabled) {
-      new cdk.CfnOutput(this, "E1_MetricsStoreEndpoint", { value: `https://${metricsStoreHost}` });
-      new cdk.CfnOutput(this, "E2_MetricsStoreDashboard", { value: `https://${metricsStoreHost}/_dashboards (access via SSH tunnel: ssh -i ~/${keyPairName}.pem -L 5601:${metricsStoreHost}:443 ec2-user@<benchmark-dns> then open https://localhost:5601/_dashboards)` });
+      new cdk.CfnOutput(this, "MetricsStoreEndpoint", { value: `https://${metricsStoreHost}` });
+      new cdk.CfnOutput(this, "MetricsStoreDashboard", { value: `https://${metricsStoreHost}/_dashboards (access via SSH tunnel: ssh -i ~/${keyPairName}.pem -L 5601:${metricsStoreHost}:443 ec2-user@<benchmark-dns> then open https://localhost:5601/_dashboards)` });
     }
 
     // =========================================================================
@@ -494,14 +494,14 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
       vmstatWidget("Lucene — Cache (KB)", `${logGroupPrefix}/lucene/vmstat`, "cache"),
     );
 
-    new cdk.CfnOutput(this, "G1_CloudWatchDashboard", {
+    new cdk.CfnOutput(this, "CloudWatchDashboard", {
       value: `https://${this.region}.console.aws.amazon.com/cloudwatch/home?region=${this.region}#dashboards/dashboard/OpenSearch-${runId}`,
     });
 
     // =========================================================================
     // Run ID
     // =========================================================================
-    new cdk.CfnOutput(this, "F1_RunID", { value: runId });
-    new cdk.CfnOutput(this, "F2_S3ResultsPath", { value: `s3://${s3ProfileBucket}/runs/${runId}/` });
+    new cdk.CfnOutput(this, "RunID", { value: runId });
+    new cdk.CfnOutput(this, "S3ResultsPath", { value: `s3://${s3ProfileBucket}/runs/${runId}/` });
   }
 }

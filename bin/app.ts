@@ -102,7 +102,7 @@ const metricsStoreSecure = process.env.METRICS_STORE_SECURE || "True";
 // =============================================================================
 // Stack name & Run ID
 // =============================================================================
-const stackSuffix = process.env.STACK_SUFFIX || "";
+const stackSuffix = app.node.tryGetContext("stackSuffix") || process.env.STACK_SUFFIX || "";
 const stackName = stackSuffix
   ? `OpenSearchCodeGuruStack-${stackSuffix}`
   : "OpenSearchCodeGuruStack";

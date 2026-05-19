@@ -5,7 +5,8 @@
     "build": "tsc",
     "cdk": "cdk",
     "synth": "cdk synth",
-    "deploy": "cdk deploy"
+    "deploy": "cdk deploy",
+    "launch": "bash scripts/launch.sh"
   },
   "dependencies": {
     "aws-cdk-lib": "^2.170.0",

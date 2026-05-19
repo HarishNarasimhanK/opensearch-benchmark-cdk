@@ -4,3 +4,5 @@ cdk.out
 .kiro
 cdk-outputs.json
 __pycache__/
+deploys/
+results/

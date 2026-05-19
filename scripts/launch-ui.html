@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>OpenSearch Benchmark — Deploy</title>
+<style>
+  :root { --bg:#0f1117; --card:#1a1d27; --border:#2d3140; --accent:#4f8cff; --text:#e4e7ed; --muted:#8b91a0; --success:#34d399; --warning:#fbbf24; --danger:#f87171; --orange:#ff6b35; --purple:#a78bfa; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Inter,sans-serif; background:var(--bg); color:var(--text); min-height:100vh; padding:40px 20px; }
+  .container { max-width:880px; margin:0 auto; }
+  h1 { font-size:26px; margin-bottom:6px; }
+  .subtitle { color:var(--muted); margin-bottom:28px; font-size:13px; }
+  .step { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:22px; margin-bottom:18px; }
+  .step-header { display:flex; align-items:center; gap:10px; margin-bottom:14px; }
+  .step-num { background:var(--accent); color:white; width:26px; height:26px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:600; }
+  .step-title { font-size:15px; font-weight:600; }
+  .desc { color:var(--muted); font-size:12px; margin-bottom:14px; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .field { display:flex; flex-direction:column; gap:3px; }
+  .field.full { grid-column:1/-1; }
+  .field label { font-size:11px; color:var(--muted); font-weight:500; text-transform:uppercase; letter-spacing:.5px; }
+  .field input, .field select { background:var(--bg); border:1px solid var(--border); border-radius:6px; padding:9px 11px; color:var(--text); font-size:13px; outline:none; transition:border-color .2s; }
+  .field input[type="number"] { -moz-appearance:textfield; }
+  .field input[type="number"]::-webkit-inner-spin-button, .field input[type="number"]::-webkit-outer-spin-button { -webkit-appearance:none; margin:0; }
+  .field input:focus, .field select:focus { border-color:var(--accent); }
+  .field input.invalid { border-color:var(--danger); }
+  .field .err { font-size:10px; color:var(--danger); min-height:14px; }
+  input::placeholder { color:#444; }
+  /* Stepper */
+  .stepper { display:flex; }
+  .stepper input { border-radius:0; text-align:center; flex:1; min-width:0; }
+  .stepper .btn { background:var(--border); border:1px solid var(--border); color:var(--text); width:34px; display:flex; align-items:center; justify-content:center; cursor:pointer; font-size:15px; user-select:none; }
+  .stepper .btn:hover { background:#3a3f50; }
+  .stepper .btn:first-child { border-radius:6px 0 0 6px; }
+  .stepper .btn:last-child { border-radius:0 6px 6px 0; }
+  /* Toggle */
+  .tog-row { display:flex; align-items:center; gap:10px; padding:6px 0; }
+  .tog { position:relative; width:40px; height:22px; cursor:pointer; }
+  .tog input { opacity:0; width:0; height:0; }
+  .tog .sl { position:absolute; inset:0; background:var(--border); border-radius:11px; transition:.2s; }
+  .tog .sl:before { content:''; position:absolute; height:16px; width:16px; left:3px; bottom:3px; background:white; border-radius:50%; transition:.2s; }
+  .tog input:checked+.sl { background:var(--accent); }
+  .tog input:checked+.sl:before { transform:translateX(18px); }
+  .tog-label { font-size:13px; }
+  /* Section */
+  .sec-tog { display:flex; align-items:center; justify-content:space-between; cursor:pointer; padding:6px 0; }
+  .sec-tog h4 { font-size:13px; color:var(--orange); }
+  .sec-tog .arr { color:var(--muted); font-size:11px; transition:transform .2s; }
+  .sec-tog.open .arr { transform:rotate(180deg); }
+  .sec-content { display:none; padding-top:10px; }
+  .sec-content.open { display:block; }
+  .divider { border-top:1px solid var(--border); margin:14px 0; }
+  /* Command */
+  .cmd { background:#000; border-radius:8px; padding:16px 18px; font-family:'SF Mono',Menlo,monospace; font-size:13px; color:var(--success); line-height:1.6; white-space:pre-wrap; word-break:break-all; position:relative; border:1px solid var(--border); cursor:pointer; user-select:all; }
+  .cmd:hover { background:#080808; }
+  .cmd .hint { position:absolute; top:10px; right:14px; font-size:10px; color:var(--muted); pointer-events:none; }
+  /* Guide */
+  .guide h4 { font-size:13px; margin-bottom:6px; }
+  .guide p { font-size:12px; color:var(--muted); margin-bottom:6px; }
+  .guide pre { background:#000; border-radius:6px; padding:12px 14px; font-family:'SF Mono',Menlo,monospace; font-size:11px; color:var(--muted); line-height:1.7; white-space:pre; overflow-x:auto; border:1px solid var(--border); margin-bottom:16px; }
+  /* Validation banner */
+  .val-banner { padding:10px 14px; border-radius:6px; font-size:12px; margin-bottom:12px; display:none; }
+  .val-banner.show { display:block; }
+  .val-banner.err { background:rgba(248,113,113,.08); border:1px solid rgba(248,113,113,.3); color:var(--danger); }
+  .val-banner.ok { background:rgba(52,211,153,.06); border:1px solid rgba(52,211,153,.2); color:var(--success); }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>🚀 OpenSearch Benchmark</h1>
+  <p class="subtitle">Configure → Copy → Paste in terminal</p>
+
+  <!-- 1: Credentials -->
+  <div class="step">
+    <div class="step-header"><div class="step-num">1</div><div class="step-title">AWS Credentials</div></div>
+    <p class="desc">Run this first in your terminal:</p>
+    <div class="grid">
+      <div class="field"><label>Account ID</label><input id="accountId" value="500923064869" data-v="digits12"><span class="err"></span></div>
+      <div class="field"><label>Role</label><input id="iamRole" value="Admin" data-v="notempty"><span class="err"></span></div>
+    </div>
+    <div class="cmd" style="margin-top:10px" onclick="cp(this)"><span id="adaCmd"></span><span class="hint">click to copy</span></div>
+  </div>
+
+  <!-- 2: Engines -->
+  <div class="step">
+    <div class="step-header"><div class="step-num">2</div><div class="step-title">Engines</div></div>
+
+    <div class="sec-tog open" onclick="tog(this)"><h4>Parquet (always on)</h4><span class="arr">▼</span></div>
+    <div class="sec-content open">
+      <div class="grid">
+        <div class="field full"><label>Source Repo</label><input id="parquetRepo" value="https://github.com/opensearch-project/OpenSearch.git" data-v="url"><span class="err"></span></div>
+        <div class="field"><label>Branch</label><input id="parquetBranch" value="main" data-v="notempty"><span class="err"></span></div>
+        <div class="field"><label>Instance Type</label><input id="parquetInstanceType" value="r8g.2xlarge" data-v="instance"><span class="err"></span></div>
+        <div class="field"><label>JVM Heap</label><input id="parquetJvmHeap" value="16g" data-v="heap"><span class="err"></span></div>
+        <div class="field"><label>EBS GB</label><input type="number" id="parquetEbsSizeGb" value="1000" data-v="posint"><span class="err"></span></div>
+        <div class="field"><label>EBS IOPS</label><input type="number" id="parquetEbsIops" value="12000" data-v="posint"><span class="err"></span></div>
+        <div class="field"><label>EBS Throughput</label><input type="number" id="parquetEbsThroughput" value="500" data-v="posint"><span class="err"></span></div>
+        <div class="field full"><label>Workload Repo</label><input id="parquetWorkloadRepo" value="https://github.com/HarishNarasimhanK/opensearch-benchmark-workloads.git" data-v="url"><span class="err"></span></div>
+        <div class="field"><label>Workload Branch</label><input id="parquetWorkloadBranch" value="parquet" data-v="notempty"><span class="err"></span></div>
+      </div>
+    </div>
+    <div class="divider"></div>
+
+    <div class="tog-row"><label class="tog"><input type="checkbox" id="luceneEnabled" checked onchange="gen()"><span class="sl"></span></label><span class="tog-label">Lucene</span></div>
+    <div id="luceneSection">
+      <div class="sec-tog" onclick="tog(this)"><h4>Lucene Settings</h4><span class="arr">▼</span></div>
+      <div class="sec-content">
+        <div class="grid">
+          <div class="field full"><label>Source Repo</label><input id="luceneRepo" value="https://github.com/opensearch-project/OpenSearch.git" data-v="url"><span class="err"></span></div>
+          <div class="field"><label>Branch</label><input id="luceneBranch" value="main" data-v="notempty"><span class="err"></span></div>
+          <div class="field"><label>Instance Type</label><input id="luceneInstanceType" value="r8g.2xlarge" data-v="instance"><span class="err"></span></div>
+          <div class="field"><label>JVM Heap</label><input id="luceneJvmHeap" value="32g" data-v="heap"><span class="err"></span></div>
+          <div class="field"><label>EBS GB</label><input type="number" id="luceneEbsSizeGb" value="1000" data-v="posint"><span class="err"></span></div>
+          <div class="field"><label>EBS IOPS</label><input type="number" id="luceneEbsIops" value="12000" data-v="posint"><span class="err"></span></div>
+          <div class="field"><label>EBS Throughput</label><input type="number" id="luceneEbsThroughput" value="500" data-v="posint"><span class="err"></span></div>
+          <div class="field full"><label>Workload Repo</label><input id="luceneWorkloadRepo" value="https://github.com/opensearch-project/opensearch-benchmark-workloads.git" data-v="url"><span class="err"></span></div>
+          <div class="field"><label>Workload Branch</label><input id="luceneWorkloadBranch" value="main" data-v="notempty"><span class="err"></span></div>
+        </div>
+      </div>
+    </div>
+    <div class="divider"></div>
+
+    <div class="tog-row"><label class="tog"><input type="checkbox" id="parquetLuceneEnabled" checked onchange="gen()"><span class="sl"></span></label><span class="tog-label">ParquetLucene</span></div>
+    <div id="parquetLuceneSection">
+      <div class="sec-tog" onclick="tog(this)"><h4>ParquetLucene Settings</h4><span class="arr">▼</span></div>
+      <div class="sec-content">
+        <div class="grid">
+          <div class="field"><label>Instance Type</label><input id="parquetLuceneInstanceType" value="r8g.2xlarge" data-v="instance"><span class="err"></span></div>
+          <div class="field"><label>JVM Heap</label><input id="parquetLuceneJvmHeap" value="16g" data-v="heap"><span class="err"></span></div>
+          <div class="field"><label>EBS GB</label><input type="number" id="parquetLuceneEbsSizeGb" value="1000" data-v="posint"><span class="err"></span></div>
+          <div class="field"><label>EBS IOPS</label><input type="number" id="parquetLuceneEbsIops" value="12000" data-v="posint"><span class="err"></span></div>
+          <div class="field"><label>EBS Throughput</label><input type="number" id="parquetLuceneEbsThroughput" value="500" data-v="posint"><span class="err"></span></div>
+          <div class="field full"><label>Workload Repo</label><input id="parquetLuceneWorkloadRepo" value="https://github.com/HarishNarasimhanK/opensearch-benchmark-workloads.git" data-v="url"><span class="err"></span></div>
+          <div class="field"><label>Workload Branch</label><input id="parquetLuceneWorkloadBranch" value="indexed_parquet" data-v="notempty"><span class="err"></span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 3: Benchmark -->
+  <div class="step">
+    <div class="step-header"><div class="step-num">3</div><div class="step-title">Benchmark</div></div>
+    <div class="tog-row"><label class="tog"><input type="checkbox" id="benchmarkEnabled" checked onchange="gen()"><span class="sl"></span></label><span class="tog-label">Enable Benchmark</span></div>
+    <div id="benchmarkSection">
+      <div class="grid" style="margin-top:10px">
+        <div class="field"><label>Instance Type</label><input id="benchmarkInstanceType" value="r8g.8xlarge" data-v="instance"><span class="err"></span></div>
+        <div class="field"><label>EBS GB</label><input type="number" id="benchmarkEbsSizeGb" value="500" data-v="posint"><span class="err"></span></div>
+        <div class="field"><label>EBS IOPS</label><input type="number" id="benchmarkEbsIops" value="12000" data-v="posint"><span class="err"></span></div>
+        <div class="field"><label>EBS Throughput</label><input type="number" id="benchmarkEbsThroughput" value="500" data-v="posint"><span class="err"></span></div>
+        <div class="field"><label>Iterations</label><input type="number" id="testIterations" value="100" data-v="posint"><span class="err"></span></div>
+        <div class="field"><label>Ingest %</label><input id="ingestPercentage" value="0.001" data-v="num"><span class="err"></span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 4: Cluster -->
+  <div class="step">
+    <div class="step-header"><div class="step-num">4</div><div class="step-title">Cluster & Run</div></div>
+    <div class="grid">
+      <div class="field"><label>Mode</label><select id="clusterMode"><option value="single">Single</option><option value="multi">Multi</option></select></div>
+      <div class="field"><label>Data Nodes</label><input type="number" id="dataNodeCount" value="3" data-v="posint"><span class="err"></span></div>
+      <div class="field full"><label>Run ID Prefix / Stack Name</label><input id="runIdPrefix" placeholder="e.g. harish, nightly, test2" data-v="optional"><span class="err"></span></div>
+    </div>
+    <p class="desc" style="margin-top:8px">⚠️ Each unique prefix creates a <strong>separate stack</strong>. Changing it deploys new infra without destroying the old one. Leave empty for the default stack.</p>
+  </div>
+
+  <!-- 5: Command -->
+  <div class="step">
+    <div class="step-header"><div class="step-num">5</div><div class="step-title">Deploy Command</div></div>
+    <div class="val-banner" id="valBanner"></div>
+    <div class="cmd" id="deployCmd" onclick="cp(this)"><span id="cmdText"></span><span class="hint">click to copy</span></div>
+  </div>
+
+  <!-- 6: Guide -->
+  <div class="step guide">
+    <div class="step-header"><div class="step-num" style="background:var(--purple)">📖</div><div class="step-title">Reference</div></div>
+
+    <h4>📁 S3 Results</h4>
+    <pre>s3://&lt;bucket&gt;/runs/&lt;run-id&gt;/
+├── benchmark-results/
+│   ├── parquet/            ← CSV (p50, p90, p99, throughput)
+│   ├── lucene/
+│   ├── parquetLucene/
+│   └── benchmark-comparison.html
+├── correctness-results/    ← Pass/fail + raw responses
+├── data-integrity/         ← Field null/count diffs
+├── profiles/               ← Flamegraphs (SVG) every 3 min
+└── storage-metrics/</pre>
+
+    <h4>📋 CloudWatch Logs</h4>
+    <pre>/opensearch/builder/user-data      ← Build progress
+/opensearch/parquet/user-data      ← Setup
+/opensearch/parquet/runtime        ← OS runtime
+/opensearch/parquet/vmstat         ← Memory (1s)
+/opensearch/parquet/node-stats     ← _nodes/stats (10s)
+/opensearch/lucene/*               ← Same as parquet
+/opensearch/parquetLucene/*        ← Same
+/opensearch/benchmark/run          ← Orchestrator
+/opensearch/benchmark/parquet      ← OSB parquet
+/opensearch/benchmark/lucene       ← OSB lucene</pre>
+
+    <h4>🔍 AOS Metrics Store</h4>
+    <p>SSH tunnel from laptop → benchmark instance → AOS domain:</p>
+    <pre># Tunnel:
+ssh -i ~/opensearch-benchmark.pem \
+  -L 5601:&lt;metrics-host&gt;:443 \
+  ec2-user@&lt;benchmark-dns&gt;
+
+# Then open: https://localhost:5601/_dashboards
+# Index: benchmark-metrics-*</pre>
+
+    <h4>📥 Fetch Results</h4>
+    <pre>./scripts/fetch-results.sh &lt;run-id&gt;
+
+# Destroy:
+npx cdk destroy --force</pre>
+  </div>
+</div>
+
+<script>
+const D = {
+  parquetRepo:'https://github.com/opensearch-project/OpenSearch.git', parquetBranch:'main', parquetInstanceType:'r8g.2xlarge', parquetJvmHeap:'16g', parquetEbsSizeGb:'1000', parquetEbsIops:'12000', parquetEbsThroughput:'500', parquetWorkloadRepo:'https://github.com/HarishNarasimhanK/opensearch-benchmark-workloads.git', parquetWorkloadBranch:'parquet',
+  luceneEnabled:'true', luceneRepo:'https://github.com/opensearch-project/OpenSearch.git', luceneBranch:'main', luceneInstanceType:'r8g.2xlarge', luceneJvmHeap:'32g', luceneEbsSizeGb:'1000', luceneEbsIops:'12000', luceneEbsThroughput:'500', luceneWorkloadRepo:'https://github.com/opensearch-project/opensearch-benchmark-workloads.git', luceneWorkloadBranch:'main',
+  parquetLuceneEnabled:'true', parquetLuceneInstanceType:'r8g.2xlarge', parquetLuceneJvmHeap:'16g', parquetLuceneEbsSizeGb:'1000', parquetLuceneEbsIops:'12000', parquetLuceneEbsThroughput:'500', parquetLuceneWorkloadRepo:'https://github.com/HarishNarasimhanK/opensearch-benchmark-workloads.git', parquetLuceneWorkloadBranch:'indexed_parquet',
+  benchmarkEnabled:'true', benchmarkInstanceType:'r8g.8xlarge', benchmarkEbsSizeGb:'500', benchmarkEbsIops:'12000', benchmarkEbsThroughput:'500', testIterations:'100', ingestPercentage:'0.001',
+  clusterMode:'single', dataNodeCount:'3', runIdPrefix:''
+};
+
+// Validation rules
+const rules = {
+  digits12: { test: v => /^\d{12}$/.test(v), msg: 'Must be 12 digits' },
+  notempty: { test: v => v.trim().length > 0, msg: 'Required' },
+  url: { test: v => /^https?:\/\/.+/.test(v), msg: 'Must be a URL (https://...)' },
+  instance: { test: v => /^[a-z]\d+[a-z]?\.\w+$/.test(v), msg: 'e.g. r8g.2xlarge' },
+  heap: { test: v => /^\d+[gm]$/.test(v), msg: 'e.g. 16g or 512m' },
+  posint: { test: v => /^\d+$/.test(v) && parseInt(v) > 0, msg: 'Positive integer' },
+  num: { test: v => !isNaN(parseFloat(v)) && parseFloat(v) >= 0, msg: 'Must be a number ≥ 0' },
+  optional: { test: () => true, msg: '' },
+};
+
+function validate() {
+  let valid = true;
+  document.querySelectorAll('[data-v]').forEach(el => {
+    const rule = rules[el.dataset.v];
+    const errEl = el.closest('.field')?.querySelector('.err');
+    if (!rule) return;
+    if (!rule.test(el.value)) {
+      el.classList.add('invalid');
+      if (errEl) errEl.textContent = rule.msg;
+      valid = false;
+    } else {
+      el.classList.remove('invalid');
+      if (errEl) errEl.textContent = '';
+    }
+  });
+  return valid;
+}
+
+function tog(el) { el.classList.toggle('open'); el.nextElementSibling.classList.toggle('open'); }
+
+function cp(el) {
+  const text = el.querySelector('span').textContent.replace(/\\\n\s*/g, ' ');
+  navigator.clipboard.writeText(text);
+  const h = el.querySelector('.hint');
+  if (h) { h.textContent = '✓ copied!'; setTimeout(() => h.textContent = 'click to copy', 1500); }
+}
+
+function gen() {
+  // Ada
+  document.getElementById('adaCmd').textContent = `ada credentials update --account ${document.getElementById('accountId').value} --role ${document.getElementById('iamRole').value}`;
+
+  // Visibility
+  document.getElementById('luceneSection').style.display = document.getElementById('luceneEnabled').checked ? 'block' : 'none';
+  document.getElementById('parquetLuceneSection').style.display = document.getElementById('parquetLuceneEnabled').checked ? 'block' : 'none';
+  document.getElementById('benchmarkSection').style.display = document.getElementById('benchmarkEnabled').checked ? 'block' : 'none';
+
+  // Validate
+  const valid = validate();
+  const banner = document.getElementById('valBanner');
+  if (!valid) {
+    banner.className = 'val-banner show err';
+    banner.textContent = '⚠️ Fix validation errors above before deploying.';
+  } else {
+    banner.className = 'val-banner show ok';
+    banner.textContent = '✅ All fields valid. Copy the command below.';
+    setTimeout(() => { banner.classList.remove('show'); }, 3000);
+  }
+
+  // Build flags
+  const v = {};
+  for (const k of Object.keys(D)) {
+    const el = document.getElementById(k);
+    if (!el) continue;
+    v[k] = el.type === 'checkbox' ? (el.checked ? 'true' : 'false') : el.value;
+  }
+  const flags = [];
+  for (const [k, val] of Object.entries(v)) { if (val !== D[k] && val !== '') flags.push(`-c ${k}=${val}`); }
+  // Stack suffix = same as run ID prefix
+  const prefix = document.getElementById('runIdPrefix').value.trim();
+  if (prefix) flags.push(`-c stackSuffix=${prefix}`);
+
+  const cmd = flags.length > 0 ? `npx cdk deploy \\\n  ${flags.join(' \\\n  ')}` : 'npx cdk deploy';
+  document.getElementById('cmdText').textContent = cmd;
+}
+
+// Wire inputs
+document.querySelectorAll('input, select').forEach(el => { el.addEventListener('input', gen); el.addEventListener('change', gen); });
+
+// Steppers for number inputs
+document.querySelectorAll('input[type="number"]').forEach(el => {
+  const w = document.createElement('div'); w.className = 'stepper';
+  const m = document.createElement('span'); m.className = 'btn'; m.textContent = '−';
+  m.onclick = () => { el.value = Math.max(1, parseInt(el.value||0) - 100); gen(); };
+  const p = document.createElement('span'); p.className = 'btn'; p.textContent = '+';
+  p.onclick = () => { el.value = parseInt(el.value||0) + 100; gen(); };
+  el.parentNode.insertBefore(w, el); w.appendChild(m); w.appendChild(el); w.appendChild(p);
+});
+
+gen();
+</script>
+</body>
+</html>

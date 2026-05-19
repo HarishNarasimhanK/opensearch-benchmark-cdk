@@ -60,7 +60,44 @@ ssh -i ~/opensearch-benchmark.pem ec2-user@<benchmark-dns> "tail -f ~/benchmark-
 
 All logs also stream to CloudWatch (persist after instance termination).
 
-### 6. Destroy
+### 6. Fetch results
+
+After benchmarks complete (check CloudWatch logs or SSH into benchmark instance):
+
+```bash
+# Auto-detect run ID from last deploy:
+./scripts/fetch-results.sh
+
+# Or specify a run ID:
+./scripts/fetch-results.sh run-20260519_143022
+```
+
+This downloads all benchmark CSVs, correctness results, flamegraphs, and the comparison dashboard to `./results/<run-id>/`, then auto-opens the HTML dashboard in your browser.
+
+```
+results/run-20260519_143022/
+├── benchmark-results/
+│   ├── parquet/         ← CSV files (p50, p90, p99, throughput per query)
+│   ├── lucene/          ← CSV files
+│   ├── parquetLucene/   ← CSV files
+│   └── benchmark-comparison.html   ← interactive Plotly dashboard
+├── correctness-results/
+├── data-integrity/
+├── profiles/            ← async-profiler flamegraphs (SVG/HTML)
+└── storage-metrics/
+```
+
+To view flamegraphs:
+```bash
+open results/<run-id>/profiles/
+```
+
+To list available runs:
+```bash
+aws s3 ls s3://<your-bucket>/runs/
+```
+
+### 7. Destroy
 
 ```bash
 npx cdk destroy --force

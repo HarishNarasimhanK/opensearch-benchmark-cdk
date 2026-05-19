@@ -10,6 +10,17 @@ exec > /var/log/user-data.log 2>&1
 yum install -y python3-pip git amazon-cloudwatch-agent
 
 # --- Step 1b: Start CloudWatch agent (streams logs to CloudWatch) ---
+# Pre-create log files WITH initial content and correct permissions.
+# CW agent (runs as cwagent) needs: file exists + readable + non-empty.
+# Also make home dir traversable by cwagent user.
+chmod 755 /home/ec2-user
+for f in benchmark-run.log field-integrity.log benchmark-lucene.log benchmark-parquet.log \
+         correctness-lucene.log benchmark-parquetLucene.log correctness-parquetLucene.log correctness-parquet.log; do
+  echo "[init] Log file created at $(date -u +%Y-%m-%dT%H:%M:%SZ)" > /home/ec2-user/$f
+  chown ec2-user:ec2-user /home/ec2-user/$f
+  chmod 644 /home/ec2-user/$f
+done
+
 cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json << 'CWCONFIG'
 {
   "logs": {

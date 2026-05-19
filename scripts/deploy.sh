@@ -12,9 +12,17 @@ echo "Deploying ${STACK_NAME}..."
 npx cdk deploy "${STACK_NAME}" --require-approval never --outputs-file cdk-outputs.json 2>&1
 
 echo ""
-echo "=== Deployment Complete ==="
-echo "Outputs written to cdk-outputs.json"
+echo "╔══════════════════════════════════════════════════════════════╗"
+echo "║                   Deployment Complete                       ║"
+echo "╚══════════════════════════════════════════════════════════════╝"
 echo ""
+
+# Pretty-print outputs with line breaks
+if [ -f cdk-outputs.json ]; then
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  jq -r 'to_entries[] | .value | to_entries[] | "  \(.key):\n    \(.value)\n"' cdk-outputs.json
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+fi
 
 # --- Parquet OpenSearch Instance ---
 INSTANCE_ID=$(jq -r ".\"${STACK_NAME}\".InstanceId // empty" cdk-outputs.json)
