@@ -83,8 +83,8 @@ const benchmarkInstanceType = ctx("benchmarkInstanceType", "BENCHMARK_INSTANCE_T
 const benchmarkEbsSizeGb = parseInt(ctx("benchmarkEbsSizeGb", "BENCHMARK_EBS_SIZE_GB", "500"), 10);
 const benchmarkEbsIops = parseInt(ctx("benchmarkEbsIops", "BENCHMARK_EBS_IOPS", "12000"), 10);
 const benchmarkEbsThroughput = parseInt(ctx("benchmarkEbsThroughput", "BENCHMARK_EBS_THROUGHPUT", "500"), 10);
-const testIterations = parseInt(ctx("testIterations", "TEST_ITERATIONS", "100"), 10);
-const ingestPercentage = parseFloat(ctx("ingestPercentage", "INGEST_PERCENTAGE", "0.001"));
+const testIterations = parseInt(ctx("testIterations", "TEST_ITERATIONS", "10"), 10);
+const ingestPercentage = parseFloat(ctx("ingestPercentage", "INGEST_PERCENTAGE", "1"));
 
 // =============================================================================
 // Cluster config

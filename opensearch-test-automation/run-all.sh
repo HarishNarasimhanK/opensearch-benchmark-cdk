@@ -1,5 +1,9 @@
 #!/bin/bash
-set -euo pipefail
+set -uo pipefail
+
+# Always write the benchmark-complete flag on exit (success or failure)
+# so data nodes can upload their data regardless of benchmark outcome.
+trap 'echo "BENCHMARK_COMPLETE=$(date -u +%Y%m%d_%H%M%S)" | aws s3 cp - "s3://${S3_BUCKET}/flags/BENCHMARK_COMPLETE" 2>/dev/null || true' EXIT
 
 # =============================================================================
 # run-all.sh — Orchestrates benchmark + correctness tests for all engines
@@ -65,12 +69,12 @@ bash "$REPO_DIR/benchmark/run-benchmark.sh" \
   --host "$PARQUET_HOST" \
   --engine parquet \
   --workload "$WORKLOAD_PATH_PARQUET" \
-  2>&1 | tee "$HOME/benchmark-parquet.log"
+  > >(tee -a "$HOME/benchmark-parquet.log") 2>&1
 
 echo ""
 echo ">>> Running Parquet correctness test..."
 bash "$REPO_DIR/correctness/run-parquet-correctness-test.sh" "$PARQUET_HOST" "parquet" \
-  2>&1 | tee "$HOME/correctness-parquet.log"
+  >> "$HOME/benchmark-parquet.log" 2>&1
 
 if [ -n "${LUCENE_HOST:-}" ]; then
   echo ""
@@ -79,12 +83,12 @@ if [ -n "${LUCENE_HOST:-}" ]; then
     --host "$LUCENE_HOST" \
     --engine lucene \
     --workload "$WORKLOAD_PATH_LUCENE" \
-    2>&1 | tee "$HOME/benchmark-lucene.log"
+    > >(tee -a "$HOME/benchmark-lucene.log") 2>&1
 
   echo ""
   echo ">>> Running Lucene correctness test..."
   bash "$REPO_DIR/correctness/run-lucene-correctness-test.sh" "$LUCENE_HOST" "lucene" "$WORKLOAD_PATH_LUCENE/operations/dsl.json" \
-    2>&1 | tee "$HOME/correctness-lucene.log"
+    >> "$HOME/benchmark-lucene.log" 2>&1
 else
   echo "Lucene instance not enabled, skipping."
 fi
@@ -96,12 +100,12 @@ if [ -n "${PARQUET_LUCENE_HOST:-}" ]; then
     --host "$PARQUET_LUCENE_HOST" \
     --engine parquetLucene \
     --workload "$WORKLOAD_PATH_PARQUET_LUCENE" \
-    2>&1 | tee "$HOME/benchmark-parquetLucene.log"
+    > >(tee -a "$HOME/benchmark-parquetLucene.log") 2>&1
 
   echo ""
   echo ">>> Running ParquetLucene correctness test..."
   bash "$REPO_DIR/correctness/run-parquet-correctness-test.sh" "$PARQUET_LUCENE_HOST" "parquetLucene" \
-    2>&1 | tee "$HOME/correctness-parquetLucene.log"
+    >> "$HOME/benchmark-parquetLucene.log" 2>&1
 else
   echo "ParquetLucene instance not enabled, skipping."
 fi
@@ -117,8 +121,7 @@ echo "============================================"
 echo ""
 echo ">>> Running field integrity check (Lucene vs Parquet)..."
 if [ -n "${LUCENE_HOST:-}" ]; then
-  bash "$REPO_DIR/data-integrity/check-field-integrity.sh" "$LUCENE_HOST" "$PARQUET_HOST" \
-    2>&1 | tee "$HOME/field-integrity.log"
+  bash "$REPO_DIR/data-integrity/check-field-integrity.sh" "$LUCENE_HOST" "$PARQUET_HOST" "clickbench" "PQ"
 else
   echo "Lucene not enabled, skipping field integrity check."
 fi
@@ -126,8 +129,7 @@ fi
 if [ -n "${LUCENE_HOST:-}" ] && [ -n "${PARQUET_LUCENE_HOST:-}" ]; then
   echo ""
   echo ">>> Running field integrity check (Lucene vs ParquetLucene)..."
-  bash "$REPO_DIR/data-integrity/check-field-integrity.sh" "$LUCENE_HOST" "$PARQUET_LUCENE_HOST" \
-    2>&1 | tee "$HOME/field-integrity-parquetLucene.log"
+  bash "$REPO_DIR/data-integrity/check-field-integrity.sh" "$LUCENE_HOST" "$PARQUET_LUCENE_HOST" "clickbench" "PQL"
 fi
 
 # --- Generate comparison visualization ---
@@ -147,8 +149,7 @@ if [ -n "$PQ_CSV" ] && [ -n "$LU_CSV" ]; then
     --lucene-csv "$LU_CSV" \
     $EXTRA_ARGS \
     --output "$HOME/benchmark-comparison.html" \
-    --run-id "$RUN_ID" \
-    2>&1 | tee "$HOME/visualization.log"
+    --run-id "$RUN_ID"
 
   # Upload to S3
   if [ -f "$HOME/benchmark-comparison.html" ]; then
@@ -163,8 +164,7 @@ fi
 # --- Signal data nodes to upload their data folders ---
 echo ""
 echo "Uploading benchmark-complete flag to S3..."
-echo "BENCHMARK_COMPLETE=$(date -u +%Y%m%d_%H%M%S)" | aws s3 cp - "s3://${S3_BUCKET}/flags/BENCHMARK_COMPLETE"
-echo "Flag uploaded — data nodes will upload their data folders shortly."
+echo "Flag will be written automatically on exit (via trap)."
 
 echo ""
 echo "============================================"

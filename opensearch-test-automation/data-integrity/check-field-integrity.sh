@@ -21,9 +21,11 @@ set -euo pipefail
 source "$HOME/.opensearch-env" 2>/dev/null || true
 
 LUCENE_HOST="${1:?Usage: $0 <lucene-host> <parquet-host> [index-name]}"
-PARQUET_HOST="${2:?Usage: $0 <lucene-host> <parquet-host> [index-name]}"
+PARQUET_HOST="${2:?Usage: $0 <lucene-host> <parquet-host> [index-name] [engine-label]}"
 INDEX="${3:-clickbench}"
+ENGINE_LABEL="${4:-PQ}"
 RUN_ID="${RUN_ID:-run-$(date +%Y%m%d_%H%M%S)}"
+export ENGINE_LABEL
 
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 OUTPUT_DIR="$HOME/data-integrity-results"
@@ -32,7 +34,7 @@ mkdir -p "$OUTPUT_DIR"
 echo "============================================"
 echo "  Field Integrity Check (PPL + DSL)"
 echo "  Lucene:     ${LUCENE_HOST}:9200  (DSL)"
-echo "  Parquet: ${PARQUET_HOST}:9200  (PPL)"
+echo "  ${ENGINE_LABEL}: ${PARQUET_HOST}:9200  (PPL)"
 echo "  Index:      ${INDEX}"
 echo "  Run ID:     ${RUN_ID}"
 echo "============================================"
@@ -97,7 +99,7 @@ print()
 # --- Step 3: Per-field checks ---
 print("Running per-field checks...")
 print()
-header = f"{'Field':<30} | {'Type':<10} | {'LU Total':>8} | {'LU Nulls':>8} | {'DF Total':>8} | {'DF Nulls':>8} | Status"
+header = f"{'Field':<30} | {'Type':<10} | {'LU Total':>8} | {'LU Nulls':>8} | {os.environ.get('ENGINE_LABEL','PQ')+' Total':>8} | {os.environ.get('ENGINE_LABEL','PQ')+' Nulls':>8} | Status"
 sep    = f"{'-'*30}-+-{'-'*10}-+-{'-'*8}-+-{'-'*8}-+-{'-'*8}-+-{'-'*8}-+-{'-'*6}"
 print(header)
 print(sep)
@@ -156,7 +158,9 @@ report = {
     "fields": results,
 }
 
-json_file = f"{output_dir}/field-integrity-{timestamp}.json"
+engine_label = os.environ.get("ENGINE_LABEL", "PQ").lower()
+
+json_file = f"{output_dir}/lucene-vs-{engine_label}-{timestamp}.json"
 with open(json_file, "w") as f:
     json.dump(report, f, indent=2)
 
@@ -172,16 +176,16 @@ print("============================================")
 if s3_bucket:
     s3_prefix = f"s3://{s3_bucket}/runs/{run_id}/data-integrity"
 
-    os.system(f'aws s3 cp "{json_file}" "{s3_prefix}/field-integrity-{timestamp}.json"')
-    print(f"Uploaded JSON: {s3_prefix}/field-integrity-{timestamp}.json")
+    os.system(f'aws s3 cp "{json_file}" "{s3_prefix}/lucene-vs-{engine_label}-{timestamp}.json"')
+    print(f"Uploaded JSON: {s3_prefix}/lucene-vs-{engine_label}-{timestamp}.json")
 
-    csv_file = f"{output_dir}/field-integrity-{timestamp}.csv"
+    csv_file = f"{output_dir}/lucene-vs-{engine_label}-{timestamp}.csv"
     with open(csv_file, "w") as f:
         f.write("Field,Type,Lucene_Total,Lucene_Nulls,Parquet_Total,Parquet_Nulls,Match\n")
         for r in results:
             f.write(f"{r['field']},{r['type']},{r['lucene_total']},{r['lucene_nulls']},{r['parquet_total']},{r['parquet_nulls']},{r['match']}\n")
 
-    os.system(f'aws s3 cp "{csv_file}" "{s3_prefix}/field-integrity-{timestamp}.csv"')
-    print(f"Uploaded CSV:  {s3_prefix}/field-integrity-{timestamp}.csv")
+    os.system(f'aws s3 cp "{csv_file}" "{s3_prefix}/lucene-vs-{engine_label}-{timestamp}.csv"')
+    print(f"Uploaded CSV:  {s3_prefix}/lucene-vs-{engine_label}-{timestamp}.csv")
 
 PYEOF
