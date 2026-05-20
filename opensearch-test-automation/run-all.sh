@@ -59,6 +59,38 @@ echo ""
 echo "Cleaning stale flags from previous runs..."
 aws s3 rm "s3://${S3_BUCKET}/flags/BENCHMARK_COMPLETE" 2>/dev/null || true
 
+# --- Pre-flight validation: check all hosts are reachable ---
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  Pre-flight Cluster Validation"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+echo "[Parquet] Cluster health:"
+curl -s --max-time 5 "http://${PARQUET_HOST}:9200/_cluster/health?pretty" 2>/dev/null || echo "  ❌ UNREACHABLE"
+echo ""
+echo "[Parquet] Indices:"
+curl -s --max-time 5 "http://${PARQUET_HOST}:9200/_cat/indices?v" 2>/dev/null || echo "  ❌ UNREACHABLE"
+echo ""
+
+if [ -n "${LUCENE_HOST:-}" ]; then
+  echo "[Lucene] Cluster health:"
+  curl -s --max-time 5 "http://${LUCENE_HOST}:9200/_cluster/health?pretty" 2>/dev/null || echo "  ❌ UNREACHABLE"
+  echo ""
+  echo "[Lucene] Indices:"
+  curl -s --max-time 5 "http://${LUCENE_HOST}:9200/_cat/indices?v" 2>/dev/null || echo "  ❌ UNREACHABLE"
+  echo ""
+fi
+
+if [ -n "${PARQUET_LUCENE_HOST:-}" ]; then
+  echo "[ParquetLucene] Cluster health:"
+  curl -s --max-time 5 "http://${PARQUET_LUCENE_HOST}:9200/_cluster/health?pretty" 2>/dev/null || echo "  ❌ UNREACHABLE"
+  echo ""
+  echo "[ParquetLucene] Indices:"
+  curl -s --max-time 5 "http://${PARQUET_LUCENE_HOST}:9200/_cat/indices?v" 2>/dev/null || echo "  ❌ UNREACHABLE"
+  echo ""
+fi
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
 # --- Run benchmarks + correctness sequentially ---
 # OSB does not allow two instances on the same machine.
 # Parquet runs first, then Lucene, then ParquetLucene.
@@ -74,7 +106,7 @@ bash "$REPO_DIR/benchmark/run-benchmark.sh" \
 echo ""
 echo ">>> Running Parquet correctness test..."
 bash "$REPO_DIR/correctness/run-parquet-correctness-test.sh" "$PARQUET_HOST" "parquet" \
-  >> "$HOME/benchmark-parquet.log" 2>&1
+  > >(tee -a "$HOME/correctness-parquet.log") 2>&1
 
 if [ -n "${LUCENE_HOST:-}" ]; then
   echo ""
@@ -88,7 +120,7 @@ if [ -n "${LUCENE_HOST:-}" ]; then
   echo ""
   echo ">>> Running Lucene correctness test..."
   bash "$REPO_DIR/correctness/run-lucene-correctness-test.sh" "$LUCENE_HOST" "lucene" "$WORKLOAD_PATH_LUCENE/operations/dsl.json" \
-    >> "$HOME/benchmark-lucene.log" 2>&1
+    > >(tee -a "$HOME/correctness-lucene.log") 2>&1
 else
   echo "Lucene instance not enabled, skipping."
 fi
@@ -105,7 +137,7 @@ if [ -n "${PARQUET_LUCENE_HOST:-}" ]; then
   echo ""
   echo ">>> Running ParquetLucene correctness test..."
   bash "$REPO_DIR/correctness/run-parquet-correctness-test.sh" "$PARQUET_LUCENE_HOST" "parquetLucene" \
-    >> "$HOME/benchmark-parquetLucene.log" 2>&1
+    > >(tee -a "$HOME/correctness-parquetLucene.log") 2>&1
 else
   echo "ParquetLucene instance not enabled, skipping."
 fi
@@ -117,11 +149,41 @@ echo "  Benchmark results:    ~/benchmark-results/"
 echo "  Correctness results:  ~/correctness-results/"
 echo "============================================"
 
+# --- Post-benchmark validation: check cluster state before field integrity ---
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  Post-Benchmark Cluster Validation"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+echo "[Parquet] Health + doc count:"
+curl -s --max-time 5 "http://${PARQUET_HOST}:9200/_cluster/health" 2>/dev/null || echo "  ❌ UNREACHABLE"
+echo ""
+curl -s --max-time 5 -X POST "http://${PARQUET_HOST}:9200/_plugins/_ppl" -H 'Content-Type: application/json' -d '{"query": "source = clickbench | stats count()"}' 2>/dev/null || echo "  ❌ PPL failed"
+echo ""
+
+if [ -n "${LUCENE_HOST:-}" ]; then
+  echo "[Lucene] Health + doc count:"
+  curl -s --max-time 5 "http://${LUCENE_HOST}:9200/_cluster/health" 2>/dev/null || echo "  ❌ UNREACHABLE"
+  echo ""
+  curl -s --max-time 5 "http://${LUCENE_HOST}:9200/clickbench/_count" 2>/dev/null || echo "  ❌ count failed"
+  echo ""
+fi
+
+if [ -n "${PARQUET_LUCENE_HOST:-}" ]; then
+  echo "[ParquetLucene] Health + doc count:"
+  curl -s --max-time 5 "http://${PARQUET_LUCENE_HOST}:9200/_cluster/health" 2>/dev/null || echo "  ❌ UNREACHABLE"
+  echo ""
+  curl -s --max-time 5 -X POST "http://${PARQUET_LUCENE_HOST}:9200/_plugins/_ppl" -H 'Content-Type: application/json' -d '{"query": "source = clickbench | stats count()"}' 2>/dev/null || echo "  ❌ PPL failed"
+  echo ""
+fi
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
 # --- Run field integrity check (data quality comparison) ---
 echo ""
 echo ">>> Running field integrity check (Lucene vs Parquet)..."
 if [ -n "${LUCENE_HOST:-}" ]; then
-  bash "$REPO_DIR/data-integrity/check-field-integrity.sh" "$LUCENE_HOST" "$PARQUET_HOST" "clickbench" "PQ"
+  bash "$REPO_DIR/data-integrity/check-field-integrity.sh" "$LUCENE_HOST" "$PARQUET_HOST" "clickbench" "PQ" \
+    > >(tee -a "$HOME/field-integrity.log") 2>&1
 else
   echo "Lucene not enabled, skipping field integrity check."
 fi
@@ -129,7 +191,8 @@ fi
 if [ -n "${LUCENE_HOST:-}" ] && [ -n "${PARQUET_LUCENE_HOST:-}" ]; then
   echo ""
   echo ">>> Running field integrity check (Lucene vs ParquetLucene)..."
-  bash "$REPO_DIR/data-integrity/check-field-integrity.sh" "$LUCENE_HOST" "$PARQUET_LUCENE_HOST" "clickbench" "PQL"
+  bash "$REPO_DIR/data-integrity/check-field-integrity.sh" "$LUCENE_HOST" "$PARQUET_LUCENE_HOST" "clickbench" "PQL" \
+    >> "$HOME/field-integrity.log" 2>&1
 fi
 
 # --- Generate comparison visualization ---

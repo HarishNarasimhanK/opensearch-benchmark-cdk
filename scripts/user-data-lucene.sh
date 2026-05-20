@@ -131,6 +131,23 @@ EOF
 fi
 chown ec2-user:ec2-user /home/ec2-user/lucene-opensearch/config/opensearch.yml
 
+# --- Step 5b: Append remote store settings (when enabled) ---
+if [ "{{REMOTE_STORE_ENABLED}}" = "true" ]; then
+  echo "" >> /home/ec2-user/lucene-opensearch/config/opensearch.yml
+  cat >> /home/ec2-user/lucene-opensearch/config/opensearch.yml << REMOTESTORE
+# --- Remote Store (S3-backed segment replication) ---
+s3.client.default.region: {{AWS_REGION}}
+node.attr.remote_store.segment.repository: my-s3-repo
+node.attr.remote_store.translog.repository: my-s3-repo
+node.attr.remote_store.state.repository: my-s3-repo
+cluster.remote_store.state.enabled: true
+node.attr.remote_store.repository.my-s3-repo.type: s3
+node.attr.remote_store.repository.my-s3-repo.settings.bucket: {{REMOTE_STORE_BUCKET}}
+node.attr.remote_store.repository.my-s3-repo.settings.base_path: {{RUN_ID}}/lucene
+REMOTESTORE
+  echo "Remote store configured: bucket={{REMOTE_STORE_BUCKET}}, base_path={{RUN_ID}}/lucene"
+fi
+
 # --- Step 6: Configure JVM heap ---
 sed -i 's/^-Xms.*/-Xms{{JVM_HEAP}}/' /home/ec2-user/lucene-opensearch/config/jvm.options
 sed -i 's/^-Xmx.*/-Xmx{{JVM_HEAP}}/' /home/ec2-user/lucene-opensearch/config/jvm.options
@@ -175,6 +192,32 @@ LOGROTATE
 # --- Step 10: Start OpenSearch ---
 su -l ec2-user -c 'nohup /home/ec2-user/lucene-opensearch/bin/opensearch > /home/ec2-user/lucene-opensearch-run.log 2>&1 &'
 echo "OpenSearch started! Waiting for it to be ready..."
+
+# --- Step 10a: Wait for OpenSearch + log cluster info ---
+PRIV_IP=$(hostname -I | awk '{print $1}')
+echo "Waiting for OpenSearch to respond on ${PRIV_IP}:9200..."
+for i in $(seq 1 120); do
+  if curl -s "http://${PRIV_IP}:9200" > /dev/null 2>&1; then
+    echo "OpenSearch is responding!"
+    break
+  fi
+  sleep 10
+done
+
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  Cluster Validation ({{NODE_NAME}})"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  Cluster health:"
+curl -s --max-time 10 "http://${PRIV_IP}:9200/_cluster/health?pretty" 2>/dev/null || echo "  (not ready yet)"
+echo ""
+echo "  Nodes:"
+curl -s --max-time 10 "http://${PRIV_IP}:9200/_cat/nodes?v" 2>/dev/null || echo "  (not ready yet)"
+echo ""
+echo "  This node:"
+curl -s --max-time 10 "http://${PRIV_IP}:9200" 2>/dev/null || echo "  (not ready yet)"
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 # --- Step 10b: Start vmstat logging (memory allocator diagnostics) ---
 yum install -y screen

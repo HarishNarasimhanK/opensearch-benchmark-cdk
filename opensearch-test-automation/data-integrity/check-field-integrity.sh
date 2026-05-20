@@ -78,6 +78,8 @@ if not mapping:
 
 fields = []
 for idx in mapping:
+    if not isinstance(mapping[idx], dict):
+        continue
     props = mapping[idx].get("mappings", {}).get("properties", {})
     for field in sorted(props.keys()):
         ftype = props[field].get("type", "unknown")

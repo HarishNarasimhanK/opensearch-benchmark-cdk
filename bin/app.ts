@@ -91,6 +91,7 @@ const ingestPercentage = parseFloat(ctx("ingestPercentage", "INGEST_PERCENTAGE",
 // =============================================================================
 const clusterMode = ctx("clusterMode", "CLUSTER_MODE", "single");
 const dataNodeCount = parseInt(ctx("dataNodeCount", "DATA_NODE_COUNT", "3"), 10);
+const remoteStoreEnabled = (ctx("remoteStoreEnabled", "REMOTE_STORE_ENABLED", "false")).toLowerCase() === "true";
 
 // =============================================================================
 // Metrics Store (AOS domain for OSB telemetry persistence)
@@ -178,6 +179,7 @@ new OpenSearchCodeGuruStack(app, stackName, {
   // Cluster
   clusterMode,
   dataNodeCount,
+  remoteStoreEnabled,
 
   // Metrics
   metricsStoreHost,

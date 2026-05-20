@@ -113,7 +113,7 @@ while true; do
     # --- Upload ---
     if [ -d "$DATA_DIR" ] && [ "$(ls -A "$DATA_DIR" 2>/dev/null)" ]; then
       echo "Tarring data directory..."
-      tar czf /tmp/data.tar.gz -C "$DATA_DIR" .
+      tar czf /tmp/data.tar.gz -C "$DATA_DIR" . || true
       SIZE=$(du -h /tmp/data.tar.gz | cut -f1)
       echo "Uploading ${SIZE} to S3..."
       aws s3 cp /tmp/data.tar.gz "$S3_TARGET"

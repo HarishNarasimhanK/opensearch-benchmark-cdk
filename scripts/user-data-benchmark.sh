@@ -14,7 +14,7 @@ yum install -y python3-pip git amazon-cloudwatch-agent
 # CW agent (runs as cwagent) needs: file exists + readable + non-empty.
 # Also make home dir traversable by cwagent user.
 chmod 755 /home/ec2-user
-for f in benchmark-run.log benchmark-parquet.log benchmark-lucene.log benchmark-parquetLucene.log; do
+for f in benchmark-run.log benchmark-parquet.log benchmark-lucene.log benchmark-parquetLucene.log correctness-parquet.log correctness-lucene.log correctness-parquetLucene.log field-integrity.log; do
   echo "[init] Log file created at $(date -u +%Y-%m-%dT%H:%M:%SZ)" > /home/ec2-user/$f
   chown ec2-user:ec2-user /home/ec2-user/$f
   chmod 644 /home/ec2-user/$f
@@ -30,7 +30,11 @@ cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json << 'CWCO
           { "file_path": "/home/ec2-user/benchmark-run.log", "log_group_name": "{{LOG_GROUP_PREFIX}}/benchmark/run", "log_stream_name": "{{RUN_ID}}/{instance_id}-benchmark" },
           { "file_path": "/home/ec2-user/benchmark-parquet.log", "log_group_name": "{{LOG_GROUP_PREFIX}}/benchmark/parquet", "log_stream_name": "{{RUN_ID}}/{instance_id}-benchmark" },
           { "file_path": "/home/ec2-user/benchmark-lucene.log", "log_group_name": "{{LOG_GROUP_PREFIX}}/benchmark/lucene", "log_stream_name": "{{RUN_ID}}/{instance_id}-benchmark" },
-          { "file_path": "/home/ec2-user/benchmark-parquetLucene.log", "log_group_name": "{{LOG_GROUP_PREFIX}}/benchmark/parquetLucene", "log_stream_name": "{{RUN_ID}}/{instance_id}-benchmark" }
+          { "file_path": "/home/ec2-user/benchmark-parquetLucene.log", "log_group_name": "{{LOG_GROUP_PREFIX}}/benchmark/parquetLucene", "log_stream_name": "{{RUN_ID}}/{instance_id}-benchmark" },
+          { "file_path": "/home/ec2-user/correctness-parquet.log", "log_group_name": "{{LOG_GROUP_PREFIX}}/benchmark/correctness-parquet", "log_stream_name": "{{RUN_ID}}/{instance_id}-benchmark" },
+          { "file_path": "/home/ec2-user/correctness-lucene.log", "log_group_name": "{{LOG_GROUP_PREFIX}}/benchmark/correctness-lucene", "log_stream_name": "{{RUN_ID}}/{instance_id}-benchmark" },
+          { "file_path": "/home/ec2-user/correctness-parquetLucene.log", "log_group_name": "{{LOG_GROUP_PREFIX}}/benchmark/correctness-parquetLucene", "log_stream_name": "{{RUN_ID}}/{instance_id}-benchmark" },
+          { "file_path": "/home/ec2-user/field-integrity.log", "log_group_name": "{{LOG_GROUP_PREFIX}}/benchmark/field-integrity", "log_stream_name": "{{RUN_ID}}/{instance_id}-benchmark" }
         ]
       }
     }

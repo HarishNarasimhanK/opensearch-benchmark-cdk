@@ -47,23 +47,25 @@ TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 # Parquet/ParquetLucene needs ~50 bulk clients for CPU saturation; Lucene needs ~8
 if [ "$ENGINE" = "parquet" ] || [ "$ENGINE" = "parquetLucene" ]; then
   NUM_SHARDS=1
+  NUM_REPLICAS=0
   BULK_CLIENTS=50
 else
   NUM_SHARDS="${DATA_NODE_COUNT:-1}"
+  NUM_REPLICAS=$([ "${DATA_NODE_COUNT:-1}" -gt 1 ] && echo 1 || echo 0)
   BULK_CLIENTS=8
 fi
 RESULTS_DIR="$HOME/benchmark-results/${ENGINE}"
 mkdir -p "$RESULTS_DIR"
 
-echo "============================================"
-echo "  Running ${ENGINE} Benchmark"
-echo "  Target: ${OS_HOST}:9200"
-echo "  Run ID: ${RUN_ID}"
-echo "  Benchmark ID: ${BENCHMARK_ID}"
-echo "  Shards: ${NUM_SHARDS} (1 per data node)"
-echo "  Test iterations: ${TEST_ITERATIONS:-20}"
-echo "  Ingest percentage: ${INGEST_PERCENTAGE:-0.001}"
-echo "============================================"
+echo "╔══════════════════════════════════════════════════════════════╗"
+echo "║  Running ${ENGINE} Benchmark"
+echo "║  Target: ${OS_HOST}:9200"
+echo "║  Run ID: ${RUN_ID}"
+echo "║  Benchmark ID: ${BENCHMARK_ID}"
+echo "║  Shards: ${NUM_SHARDS} | Bulk clients: ${BULK_CLIENTS}"
+echo "║  Test iterations: ${TEST_ITERATIONS:-10}"
+echo "║  Ingest percentage: ${INGEST_PERCENTAGE:-1}"
+echo "╚══════════════════════════════════════════════════════════════╝"
 
 # --- Wait for cluster health to be green (indefinitely) ---
 echo "Waiting for cluster health green at ${OS_HOST}:9200..."
@@ -140,9 +142,9 @@ TELEMETRY_PARAMS='{"node-stats-sample-interval": 5, "node-stats-include-indices"
 BENCH_START=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 BENCH_START_EPOCH=$(date +%s)
 echo ""
-echo "-----------------------------------"
-echo "[INFO] [${ENGINE}] Benchmark START: ${BENCH_START}"
-echo "-----------------------------------"
+echo "┌─────────────────────────────────────────────────────────────┐"
+echo "│  [${ENGINE}] OSB Benchmark START: ${BENCH_START}            │"
+echo "└─────────────────────────────────────────────────────────────┘"
 
 opensearch-benchmark run \
   --pipeline="benchmark-only" \
@@ -156,23 +158,35 @@ opensearch-benchmark run \
   --show-in-results=all-percentiles \
   --telemetry=node-stats \
   --telemetry-params="${TELEMETRY_PARAMS}" \
-  --workload-params="{\"ingest_percentage\": ${INGEST_PERCENTAGE:-0.001}, \"number_of_replicas\": 0, \"bulk_indexing_clients\": ${BULK_CLIENTS}, \"test_iterations\": ${TEST_ITERATIONS:-100}, \"warmup_iterations\": 3, \"target_throughput\": 2}" \
+  --workload-params="{\"ingest_percentage\": ${INGEST_PERCENTAGE:-1}, \"number_of_shards\": ${NUM_SHARDS}, \"number_of_replicas\": ${NUM_REPLICAS}, \"bulk_indexing_clients\": ${BULK_CLIENTS}, \"test_iterations\": ${TEST_ITERATIONS:-10}, \"warmup_iterations\": 3, \"target_throughput\": 2}" \
   && OSB_EXIT=0 || OSB_EXIT=$?
 BENCH_END=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 BENCH_END_EPOCH=$(date +%s)
 BENCH_DURATION=$((BENCH_END_EPOCH - BENCH_START_EPOCH))
 
 echo ""
-echo "-----------------------------------"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 if [ $OSB_EXIT -eq 0 ]; then
-  echo "[INFO] [${ENGINE}] ✅ SUCCESS (took ${BENCH_DURATION} seconds)"
+  echo "  [${ENGINE}] ✅ SUCCESS (took ${BENCH_DURATION}s — $((BENCH_DURATION / 60))m $((BENCH_DURATION % 60))s)"
 else
-  echo "[WARN] [${ENGINE}] ⚠️  FINISHED WITH ERRORS (exit code: ${OSB_EXIT}, took ${BENCH_DURATION} seconds)"
+  echo "  [${ENGINE}] ⚠️  FINISHED WITH ERRORS (exit code: ${OSB_EXIT}, took ${BENCH_DURATION}s)"
 fi
-echo "[INFO] [${ENGINE}] Benchmark START: ${BENCH_START}"
-echo "[INFO] [${ENGINE}] Benchmark END:   ${BENCH_END}"
-echo "[INFO] [${ENGINE}] Duration:        ${BENCH_DURATION}s ($((BENCH_DURATION / 60))m $((BENCH_DURATION % 60))s)"
-echo "-----------------------------------"
+echo "  Start: ${BENCH_START}"
+echo "  End:   ${BENCH_END}"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+# --- Post-benchmark: log index settings and doc count ---
+echo ""
+echo "┌─────────────────────────────────────────────────────────────┐"
+echo "│  [${ENGINE}] Index State After Benchmark                    │"
+echo "└─────────────────────────────────────────────────────────────┘"
+echo ""
+echo "  _cat/indices:"
+curl -s --max-time 5 "http://${OS_HOST}:9200/_cat/indices?v" 2>/dev/null || echo "  ❌ unreachable"
+echo ""
+echo "  Index settings (clickbench):"
+curl -s --max-time 5 "http://${OS_HOST}:9200/clickbench/_settings" 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); s=list(d.values())[0]['settings']['index']; print(json.dumps({k:v for k,v in s.items() if k in ('number_of_shards','number_of_replicas','pluggable','composite','refresh_interval')}, indent=2))" 2>/dev/null || echo "  (could not fetch settings)"
+echo ""
 
 echo "Results: ${RESULTS_DIR}/${ENGINE}-benchmark-${TIMESTAMP}.csv"
 

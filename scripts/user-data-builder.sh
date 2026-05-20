@@ -146,6 +146,17 @@ cd $SRC
   $DIST/bin/opensearch-plugin install --batch "file://$DISC_ZIP" || \
   echo "discovery-ec2 plugin build failed (non-fatal — only needed for multi-node)"
 
+# Install repository-s3 plugin (for remote store)
+if [ "{{REMOTE_STORE_ENABLED}}" = "true" ]; then
+  echo "=== Building repository-s3 plugin ==="
+  cd $SRC
+  ./gradlew :plugins:repository-s3:bundlePlugin -Dsandbox.enabled=true -x test -x missingJavadoc 2>/dev/null && \
+    S3_ZIP=$(ls $SRC/plugins/repository-s3/build/distributions/repository-s3-*.zip | head -1) && \
+    $DIST/bin/opensearch-plugin install --batch "file://$S3_ZIP" && \
+    echo "repository-s3 plugin installed" || \
+    echo "repository-s3 plugin build failed (non-fatal — only needed for remote store)"
+fi
+
 # Package and upload
 echo "=== Packaging Parquet tar.gz ==="
 tar czf /tmp/opensearch-parquet.tar.gz -C $DIST .
@@ -195,6 +206,16 @@ echo "=== Building discovery-ec2 plugin ==="
   DISC_ZIP=$(ls $SRC/plugins/discovery-ec2/build/distributions/discovery-ec2-*.zip | head -1) && \
   $DIST/bin/opensearch-plugin install --batch "file://$DISC_ZIP" || \
   echo "discovery-ec2 plugin build failed (non-fatal — only needed for multi-node)"
+
+# Install repository-s3 plugin (for remote store)
+if [ "{{REMOTE_STORE_ENABLED}}" = "true" ]; then
+  echo "=== Building repository-s3 plugin ==="
+  ./gradlew :plugins:repository-s3:bundlePlugin -x test -x missingJavadoc 2>/dev/null && \
+    S3_ZIP=$(ls $SRC/plugins/repository-s3/build/distributions/repository-s3-*.zip | head -1) && \
+    $DIST/bin/opensearch-plugin install --batch "file://$S3_ZIP" && \
+    echo "repository-s3 plugin installed" || \
+    echo "repository-s3 plugin build failed (non-fatal — only needed for remote store)"
+fi
 
 # Package and upload
 echo "=== Packaging Lucene tar.gz ==="

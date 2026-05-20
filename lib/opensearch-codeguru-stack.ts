@@ -4,6 +4,7 @@ import * as iam from "aws-cdk-lib/aws-iam";
 import * as elbv2 from "aws-cdk-lib/aws-elasticloadbalancingv2";
 import * as targets from "aws-cdk-lib/aws-elasticloadbalancingv2-targets";
 import * as s3assets from "aws-cdk-lib/aws-s3-assets";
+import * as s3 from "aws-cdk-lib/aws-s3";
 import * as cw from "aws-cdk-lib/aws-cloudwatch";
 import { Construct } from "constructs";
 import * as fs from "fs";
@@ -63,6 +64,7 @@ interface OpenSearchCodeGuruStackProps extends cdk.StackProps {
   // Cluster
   clusterMode: string;
   dataNodeCount: number;
+  remoteStoreEnabled: boolean;
 
   // Metrics
   metricsStoreHost: string;
@@ -87,12 +89,24 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
       parquetLuceneWorkloadRepo, parquetLuceneWorkloadBranch,
       benchmarkEnabled, benchmarkInstanceType, benchmarkEbsSizeGb, benchmarkEbsIops, benchmarkEbsThroughput,
       testIterations, ingestPercentage,
-      clusterMode, dataNodeCount, metricsStoreHost, metricsStorePort, metricsStoreSecure, runId, runIdPrefix } = props;
+      clusterMode, dataNodeCount, remoteStoreEnabled, metricsStoreHost, metricsStorePort, metricsStoreSecure, runId, runIdPrefix } = props;
 
     const isMultiNode = clusterMode === "multi";
     const clusterTag = `${id}-parquet-cluster`;
     // Log group prefix: "/opensearch" for normal, "/opensearch/nightly" for nightly
     const logGroupPrefix = runIdPrefix ? `/opensearch/${runIdPrefix}` : "/opensearch";
+
+    // --- Remote Store S3 bucket (created only when enabled) ---
+    let remoteStoreBucketName = "";
+    if (remoteStoreEnabled) {
+      const remoteStoreBucket = new s3.Bucket(this, "RemoteStoreBucket", {
+        removalPolicy: cdk.RemovalPolicy.DESTROY,
+        autoDeleteObjects: true,
+        encryption: s3.BucketEncryption.S3_MANAGED,
+        lifecycleRules: [{ expiration: cdk.Duration.days(30) }],
+      });
+      remoteStoreBucketName = remoteStoreBucket.bucketName;
+    }
 
     // --- Look up existing VPC and Subnet ---
     const vpc = ec2.Vpc.fromLookup(this, "ExistingVpc", { vpcId });
@@ -175,7 +189,10 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
         .replace(/\{\{NODE_ROLES\}\}/g, nodeRoles)
         .replace(/\{\{BENCHMARK_ENABLED\}\}/g, String(benchmarkEnabled))
         .replace(/\{\{RUN_ID\}\}/g, runId)
-        .replace(/\{\{LOG_GROUP_PREFIX\}\}/g, logGroupPrefix);
+        .replace(/\{\{LOG_GROUP_PREFIX\}\}/g, logGroupPrefix)
+        .replace(/\{\{REMOTE_STORE_ENABLED\}\}/g, String(remoteStoreEnabled))
+        .replace(/\{\{REMOTE_STORE_BUCKET\}\}/g, remoteStoreBucketName)
+        .replace(/\{\{AWS_REGION\}\}/g, this.region);
 
       const inst = createInstance(nodeId, ltId, script, parquetInstanceType, parquetEbsSizeGb, parquetEbsIops, parquetEbsThroughput);
       const nameTag = nodeName ? `${id}-Parquet-${runId}-${nodeName}` : `${id}-Parquet-${runId}`;
@@ -198,7 +215,8 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
       .replace(/\{\{LUCENE_REPO\}\}/g, luceneRepo)
       .replace(/\{\{S3_PROFILE_BUCKET\}\}/g, s3ProfileBucket)
       .replace(/\{\{RUN_ID\}\}/g, runId)
-      .replace(/\{\{LOG_GROUP_PREFIX\}\}/g, logGroupPrefix);
+      .replace(/\{\{LOG_GROUP_PREFIX\}\}/g, logGroupPrefix)
+      .replace(/\{\{REMOTE_STORE_ENABLED\}\}/g, String(remoteStoreEnabled));
 
     const builderInstance = createInstance("BuilderInstance", "BuilderLt", builderScript, parquetInstanceType, parquetEbsSizeGb, parquetEbsIops, parquetEbsThroughput);
     cdk.Tags.of(builderInstance).add("Name", `${id}-Builder-${runId}`);
@@ -286,7 +304,10 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
           .replace(/\{\{NODE_ROLES\}\}/g, nodeRoles)
           .replace(/\{\{BENCHMARK_ENABLED\}\}/g, String(benchmarkEnabled))
           .replace(/\{\{RUN_ID\}\}/g, runId)
-          .replace(/\{\{LOG_GROUP_PREFIX\}\}/g, logGroupPrefix);
+          .replace(/\{\{LOG_GROUP_PREFIX\}\}/g, logGroupPrefix)
+          .replace(/\{\{REMOTE_STORE_ENABLED\}\}/g, String(remoteStoreEnabled))
+          .replace(/\{\{REMOTE_STORE_BUCKET\}\}/g, remoteStoreBucketName)
+          .replace(/\{\{AWS_REGION\}\}/g, this.region);
 
         const inst = createInstance(nodeId, ltId, script, luceneInstanceType, luceneEbsSizeGb, luceneEbsIops, luceneEbsThroughput);
         const nameTag = nodeName ? `${id}-Lucene-${runId}-${nodeName}` : `${id}-Lucene-${runId}`;
@@ -359,32 +380,87 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
     let parquetLuceneEndpoint = "";
     let parquetLuceneInstanceId: string = "";
     if (parquetLuceneEnabled) {
+      const parquetLuceneClusterTag = `${id}-parquetLucene-cluster`;
+
       const createParquetLuceneInstance = (nodeId: string, ltId: string, nodeName: string, nodeRoles: string): ec2.Instance => {
         const script = fs.readFileSync(path.join(__dirname, "..", "scripts", "user-data-parquetLucene.sh"), "utf-8")
           .replace(/\{\{S3_PROFILE_BUCKET\}\}/g, s3ProfileBucket)
           .replace(/\{\{JVM_HEAP\}\}/g, parquetLuceneJvmHeap)
           .replace(/\{\{SCRIPTS_S3_PATH\}\}/g, scriptsS3Path)
           .replace(/\{\{CLUSTER_MODE\}\}/g, clusterMode)
-          .replace(/\{\{CLUSTER_TAG\}\}/g, `${id}-parquetLucene-cluster`)
+          .replace(/\{\{CLUSTER_TAG\}\}/g, parquetLuceneClusterTag)
           .replace(/\{\{NODE_NAME\}\}/g, nodeName)
           .replace(/\{\{NODE_ROLES\}\}/g, nodeRoles)
           .replace(/\{\{BENCHMARK_ENABLED\}\}/g, String(benchmarkEnabled))
           .replace(/\{\{RUN_ID\}\}/g, runId)
-          .replace(/\{\{LOG_GROUP_PREFIX\}\}/g, logGroupPrefix);
+          .replace(/\{\{LOG_GROUP_PREFIX\}\}/g, logGroupPrefix)
+          .replace(/\{\{REMOTE_STORE_ENABLED\}\}/g, String(remoteStoreEnabled))
+          .replace(/\{\{REMOTE_STORE_BUCKET\}\}/g, remoteStoreBucketName)
+          .replace(/\{\{AWS_REGION\}\}/g, this.region);
 
         const inst = createInstance(nodeId, ltId, script, parquetLuceneInstanceType, parquetLuceneEbsSizeGb, parquetLuceneEbsIops, parquetLuceneEbsThroughput);
         cdk.Tags.of(inst).add("Name", `${id}-ParquetLucene-${runId}-${nodeName}`);
+
+        if (isMultiNode) {
+          cdk.Tags.of(inst).add("cluster", parquetLuceneClusterTag);
+        }
+
         return inst;
       };
 
-      const parquetLuceneInstance = createParquetLuceneInstance("ParquetLuceneInstance", "ParquetLuceneLt", "node", "");
-      parquetLuceneEndpoint = parquetLuceneInstance.instancePrivateIp;
-      parquetLuceneInstanceId = parquetLuceneInstance.instanceId;
+      if (isMultiNode) {
+        // --- Multi-node: 3 managers + N data nodes + internal ALB ---
+        const pqlSeedManager = createParquetLuceneInstance("PQLSeedManager", "PQLSeedManagerLt", "clusterManager-seed", "cluster_manager");
+        new cdk.CfnOutput(this, "ParquetLuceneSeedManagerSSH", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${pqlSeedManager.instancePublicDnsName}` });
 
-      new cdk.CfnOutput(this, "ParquetLuceneSSH", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${parquetLuceneInstance.instancePublicDnsName}` });
-      new cdk.CfnOutput(this, "ParquetLuceneSetupLog", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${parquetLuceneInstance.instancePublicDnsName} "tail -f /var/log/user-data.log"` });
-      new cdk.CfnOutput(this, "ParquetLuceneRuntimeLog", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${parquetLuceneInstance.instancePublicDnsName} "tail -f ~/parquetLucene-opensearch-run.log"` });
-      new cdk.CfnOutput(this, "ParquetLucenePrivateIp", { value: parquetLuceneInstance.instancePrivateIp });
+        for (let i = 2; i <= 3; i++) {
+          createParquetLuceneInstance(`PQLManager${i}`, `PQLManager${i}Lt`, `clusterManager-${i}`, "cluster_manager");
+        }
+
+        const pqlDataInstances: ec2.Instance[] = [];
+        for (let i = 1; i <= dataNodeCount; i++) {
+          const data = createParquetLuceneInstance(`PQLDataNode${i}`, `PQLDataNode${i}Lt`, `dataNode-${i}`, "data, ingest");
+          pqlDataInstances.push(data);
+          if (i === 1) parquetLuceneInstanceId = data.instanceId;
+          new cdk.CfnOutput(this, `ParquetLuceneDataNode${i}SSH`, { value: `ssh -i ~/${keyPairName}.pem ec2-user@${data.instancePublicDnsName}` });
+        }
+
+        // Internal ALB for ParquetLucene cluster
+        const pqlAlb = new elbv2.ApplicationLoadBalancer(this, "PQLClusterALB", {
+          vpc, internetFacing: false, securityGroup: sg,
+        });
+
+        const pqlListener = pqlAlb.addListener("PQLOpenSearchListener", {
+          port: 9200, protocol: elbv2.ApplicationProtocol.HTTP,
+        });
+
+        pqlListener.addTargets("PQLDataNodeTargets", {
+          port: 9200,
+          protocol: elbv2.ApplicationProtocol.HTTP,
+          targets: pqlDataInstances.map((inst) => new targets.InstanceTarget(inst, 9200)),
+          healthCheck: {
+            path: "/", port: "9200", healthyHttpCodes: "200",
+            interval: cdk.Duration.seconds(30), timeout: cdk.Duration.seconds(10),
+            healthyThresholdCount: 2, unhealthyThresholdCount: 10,
+          },
+        });
+
+        parquetLuceneEndpoint = pqlAlb.loadBalancerDnsName;
+
+        new cdk.CfnOutput(this, "ParquetLuceneClusterALBUrl", { value: `http://${pqlAlb.loadBalancerDnsName}:9200` });
+        new cdk.CfnOutput(this, "ParquetLuceneClusterMode", { value: `multi (3 managers + ${dataNodeCount} data nodes)` });
+
+      } else {
+        // --- Single-node (default) ---
+        const parquetLuceneInstance = createParquetLuceneInstance("ParquetLuceneInstance", "ParquetLuceneLt", "node", "");
+        parquetLuceneEndpoint = parquetLuceneInstance.instancePrivateIp;
+        parquetLuceneInstanceId = parquetLuceneInstance.instanceId;
+
+        new cdk.CfnOutput(this, "ParquetLuceneSSH", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${parquetLuceneInstance.instancePublicDnsName}` });
+        new cdk.CfnOutput(this, "ParquetLuceneSetupLog", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${parquetLuceneInstance.instancePublicDnsName} "tail -f /var/log/user-data.log"` });
+        new cdk.CfnOutput(this, "ParquetLuceneRuntimeLog", { value: `ssh -i ~/${keyPairName}.pem ec2-user@${parquetLuceneInstance.instancePublicDnsName} "tail -f ~/parquetLucene-opensearch-run.log"` });
+        new cdk.CfnOutput(this, "ParquetLucenePrivateIp", { value: parquetLuceneInstance.instancePrivateIp });
+      }
     }
 
     // =========================================================================
@@ -429,14 +505,14 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
     }
 
     // =========================================================================
-    // CloudWatch Dashboard — side-by-side Parquet vs Lucene system metrics
+    // CloudWatch Dashboard — All 3 engines: system metrics + node-stats
     // =========================================================================
     const metricsNamespace = `OpenSearch/${runId}`;
-
-    // Use instance IDs to identify engines (EngineRole custom dimension is not supported by CW agent)
     const pqInstanceId = parquetInstanceId;
     const luInstanceId = luceneInstanceId;
+    const pqlInstanceId = parquetLuceneInstanceId;
 
+    // Helper: create a metric for a given instance
     const cwMetric = (metricName: string, instanceId: string, extraDims?: Record<string, string>): cw.Metric =>
       new cw.Metric({
         namespace: metricsNamespace, metricName,
@@ -444,12 +520,15 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
         period: cdk.Duration.seconds(60), statistic: "Average",
       });
 
-    const sideBySide = (title: string, metricName: string, yLabel: string, extraDims?: Record<string, string>): cw.GraphWidget => {
-      const left = [cwMetric(metricName, pqInstanceId, extraDims).with({ label: "Parquet", color: "#FF6B35" })];
-      const right = luInstanceId ? [cwMetric(metricName, luInstanceId, extraDims).with({ label: "Lucene", color: "#004E89" })] : [];
+    // Helper: 3-engine graph (all on left axis for direct comparison)
+    const tripleGraph = (title: string, metricName: string, yLabel: string, extraDims?: Record<string, string>): cw.GraphWidget => {
+      const metrics: cw.Metric[] = [];
+      if (pqInstanceId) metrics.push(cwMetric(metricName, pqInstanceId, extraDims).with({ label: "Parquet", color: "#FF6B35" }));
+      if (luInstanceId) metrics.push(cwMetric(metricName, luInstanceId, extraDims).with({ label: "Lucene", color: "#004E89" }));
+      if (pqlInstanceId) metrics.push(cwMetric(metricName, pqlInstanceId, extraDims).with({ label: "ParquetLucene", color: "#7B2D8B" }));
       return new cw.GraphWidget({
-        title, width: 24, height: 6, left, right,
-        leftYAxis: { label: yLabel }, rightYAxis: { label: yLabel },
+        title, width: 12, height: 6, left: metrics,
+        leftYAxis: { label: yLabel },
       });
     };
 
@@ -457,20 +536,53 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
       dashboardName: `OpenSearch-${runId}`,
     });
 
+    // --- Header ---
     dashboard.addWidgets(
       new cw.TextWidget({
-        markdown: `# Parquet vs Lucene — ${runId}\nNamespace: \`${metricsNamespace}\`\n\nNote: Graphs use InstanceId to distinguish engines. If graphs are empty, the instances may still be starting up. Check back in 30-40 minutes after deploy.`,
+        markdown: `# Benchmark Dashboard — ${runId}\nEngines: Parquet | Lucene | ParquetLucene\nNamespace: \`${metricsNamespace}\`\n\nGraphs populate ~30-40 min after deploy (after build + OpenSearch start).`,
         width: 24, height: 2,
       }),
     );
-    dashboard.addWidgets(sideBySide("CPU Usage (%)", "cpu_usage_user", "%", { cpu: "cpu-total" }));
-    dashboard.addWidgets(sideBySide("Memory Used (%)", "mem_used_percent", "%"));
-    dashboard.addWidgets(sideBySide("Disk I/O — Write Bytes", "diskio_write_bytes", "bytes", { name: "nvme0n1p1" }));
-    dashboard.addWidgets(sideBySide("Disk I/O — Read Bytes", "diskio_read_bytes", "bytes", { name: "nvme0n1p1" }));
-    dashboard.addWidgets(sideBySide("Network — Bytes Sent", "net_bytes_sent", "bytes", { interface: "ens5" }));
-    dashboard.addWidgets(sideBySide("Network — Bytes Received", "net_bytes_recv", "bytes", { interface: "ens5" }));
 
-    // vmstat memory stats from logs — separate widgets per metric for proper scaling
+    // --- CPU ---
+    dashboard.addWidgets(
+      tripleGraph("CPU — User (%)", "cpu_usage_user", "%"),
+      tripleGraph("CPU — System (%)", "cpu_usage_system", "%"),
+    );
+    dashboard.addWidgets(
+      tripleGraph("CPU — IOWait (%)", "cpu_usage_iowait", "%"),
+      tripleGraph("CPU — Idle (%)", "cpu_usage_idle", "%"),
+    );
+
+    // --- Memory ---
+    dashboard.addWidgets(
+      tripleGraph("Memory Used (%)", "mem_used_percent", "%"),
+      tripleGraph("Memory Available (bytes)", "mem_available", "bytes"),
+    );
+
+    // --- Disk I/O ---
+    dashboard.addWidgets(
+      tripleGraph("Disk — Write Bytes/s", "diskio_write_bytes", "bytes"),
+      tripleGraph("Disk — Read Bytes/s", "diskio_read_bytes", "bytes"),
+    );
+    dashboard.addWidgets(
+      tripleGraph("Disk — IOPS In Progress", "diskio_iops_in_progress", "count"),
+      tripleGraph("Disk — Used (%)", "disk_used_percent", "%"),
+    );
+
+    // --- Network ---
+    dashboard.addWidgets(
+      tripleGraph("Network — Bytes Sent", "net_bytes_sent", "bytes"),
+      tripleGraph("Network — Bytes Received", "net_bytes_recv", "bytes"),
+    );
+
+    // --- Swap ---
+    dashboard.addWidgets(
+      tripleGraph("Swap Used (%)", "swap_used_percent", "%"),
+      tripleGraph("TCP Connections — Established", "netstat_tcp_established", "count"),
+    );
+
+    // --- vmstat (from logs) ---
     const vmstatWidget = (title: string, logGroup: string, field: string): cw.LogQueryWidget =>
       new cw.LogQueryWidget({
         title, logGroupNames: [logGroup],
@@ -484,14 +596,229 @@ export class OpenSearchCodeGuruStack extends cdk.Stack {
       });
 
     dashboard.addWidgets(
-      vmstatWidget("Parquet — Free Memory (KB)", `${logGroupPrefix}/parquet/vmstat`, "free"),
-      vmstatWidget("Parquet — Buffer (KB)", `${logGroupPrefix}/parquet/vmstat`, "buff"),
-      vmstatWidget("Parquet — Cache (KB)", `${logGroupPrefix}/parquet/vmstat`, "cache"),
+      vmstatWidget("Parquet — Free Mem (KB)", `${logGroupPrefix}/parquet/vmstat`, "free"),
+      vmstatWidget("Lucene — Free Mem (KB)", `${logGroupPrefix}/lucene/vmstat`, "free"),
+      vmstatWidget("ParquetLucene — Free Mem (KB)", `${logGroupPrefix}/parquetLucene/vmstat`, "free"),
     );
     dashboard.addWidgets(
-      vmstatWidget("Lucene — Free Memory (KB)", `${logGroupPrefix}/lucene/vmstat`, "free"),
+      vmstatWidget("Parquet — Buffer (KB)", `${logGroupPrefix}/parquet/vmstat`, "buff"),
       vmstatWidget("Lucene — Buffer (KB)", `${logGroupPrefix}/lucene/vmstat`, "buff"),
+      vmstatWidget("ParquetLucene — Buffer (KB)", `${logGroupPrefix}/parquetLucene/vmstat`, "buff"),
+    );
+    dashboard.addWidgets(
+      vmstatWidget("Parquet — Cache (KB)", `${logGroupPrefix}/parquet/vmstat`, "cache"),
       vmstatWidget("Lucene — Cache (KB)", `${logGroupPrefix}/lucene/vmstat`, "cache"),
+      vmstatWidget("ParquetLucene — Cache (KB)", `${logGroupPrefix}/parquetLucene/vmstat`, "cache"),
+    );
+
+    // --- Node Stats (from logs) — JVM heap, merges, indexing, queries ---
+    const nodeStatsWidget = (title: string, logGroup: string, queryLines: string[]): cw.LogQueryWidget =>
+      new cw.LogQueryWidget({
+        title, logGroupNames: [logGroup],
+        queryLines,
+        view: cw.LogQueryVisualizationType.LINE,
+        width: 8, height: 6,
+      });
+
+    // JVM Heap Used %
+    dashboard.addWidgets(
+      new cw.TextWidget({ markdown: "## Node Stats (from `_nodes/stats` every 10s)", width: 24, height: 1 }),
+    );
+    dashboard.addWidgets(
+      nodeStatsWidget("Parquet — JVM Heap Used %", `${logGroupPrefix}/parquet/node-stats`, [
+        `fields @timestamp, @message`,
+        `parse @message /"heap_used_percent":(?<heap_pct>\\d+)/ `,
+        `filter ispresent(heap_pct)`,
+        `stats avg(heap_pct) as heap_percent by bin(1m)`,
+      ]),
+      nodeStatsWidget("Lucene — JVM Heap Used %", `${logGroupPrefix}/lucene/node-stats`, [
+        `fields @timestamp, @message`,
+        `parse @message /"heap_used_percent":(?<heap_pct>\\d+)/ `,
+        `filter ispresent(heap_pct)`,
+        `stats avg(heap_pct) as heap_percent by bin(1m)`,
+      ]),
+      nodeStatsWidget("ParquetLucene — JVM Heap Used %", `${logGroupPrefix}/parquetLucene/node-stats`, [
+        `fields @timestamp, @message`,
+        `parse @message /"heap_used_percent":(?<heap_pct>\\d+)/ `,
+        `filter ispresent(heap_pct)`,
+        `stats avg(heap_pct) as heap_percent by bin(1m)`,
+      ]),
+    );
+
+    // Merge time (cumulative)
+    dashboard.addWidgets(
+      nodeStatsWidget("Parquet — Merge Time (ms)", `${logGroupPrefix}/parquet/node-stats`, [
+        `fields @timestamp, @message`,
+        `parse @message /"total_time_in_millis":(?<merge_ms>\\d+)/ `,
+        `filter ispresent(merge_ms)`,
+        `stats max(merge_ms) as merge_time_ms by bin(1m)`,
+      ]),
+      nodeStatsWidget("Lucene — Merge Time (ms)", `${logGroupPrefix}/lucene/node-stats`, [
+        `fields @timestamp, @message`,
+        `parse @message /"total_time_in_millis":(?<merge_ms>\\d+)/ `,
+        `filter ispresent(merge_ms)`,
+        `stats max(merge_ms) as merge_time_ms by bin(1m)`,
+      ]),
+      nodeStatsWidget("ParquetLucene — Merge Time (ms)", `${logGroupPrefix}/parquetLucene/node-stats`, [
+        `fields @timestamp, @message`,
+        `parse @message /"total_time_in_millis":(?<merge_ms>\\d+)/ `,
+        `filter ispresent(merge_ms)`,
+        `stats max(merge_ms) as merge_time_ms by bin(1m)`,
+      ]),
+    );
+
+    // GC time
+    dashboard.addWidgets(
+      nodeStatsWidget("Parquet — Young GC Time (ms)", `${logGroupPrefix}/parquet/node-stats`, [
+        `fields @timestamp, @message`,
+        `parse @message /"young":\\{"collection_count":\\d+,"collection_time_in_millis":(?<gc_ms>\\d+)/ `,
+        `filter ispresent(gc_ms)`,
+        `stats max(gc_ms) as young_gc_ms by bin(1m)`,
+      ]),
+      nodeStatsWidget("Lucene — Young GC Time (ms)", `${logGroupPrefix}/lucene/node-stats`, [
+        `fields @timestamp, @message`,
+        `parse @message /"young":\\{"collection_count":\\d+,"collection_time_in_millis":(?<gc_ms>\\d+)/ `,
+        `filter ispresent(gc_ms)`,
+        `stats max(gc_ms) as young_gc_ms by bin(1m)`,
+      ]),
+      nodeStatsWidget("ParquetLucene — Young GC Time (ms)", `${logGroupPrefix}/parquetLucene/node-stats`, [
+        `fields @timestamp, @message`,
+        `parse @message /"young":\\{"collection_count":\\d+,"collection_time_in_millis":(?<gc_ms>\\d+)/ `,
+        `filter ispresent(gc_ms)`,
+        `stats max(gc_ms) as young_gc_ms by bin(1m)`,
+      ]),
+    );
+
+    // Indexing — docs indexed (cumulative)
+    dashboard.addWidgets(
+      nodeStatsWidget("Parquet — Docs Indexed", `${logGroupPrefix}/parquet/node-stats`, [
+        `fields @timestamp, @message`,
+        `parse @message /"index_total":(?<idx_total>\\d+)/ `,
+        `filter ispresent(idx_total)`,
+        `stats max(idx_total) as docs_indexed by bin(1m)`,
+      ]),
+      nodeStatsWidget("Lucene — Docs Indexed", `${logGroupPrefix}/lucene/node-stats`, [
+        `fields @timestamp, @message`,
+        `parse @message /"index_total":(?<idx_total>\\d+)/ `,
+        `filter ispresent(idx_total)`,
+        `stats max(idx_total) as docs_indexed by bin(1m)`,
+      ]),
+      nodeStatsWidget("ParquetLucene — Docs Indexed", `${logGroupPrefix}/parquetLucene/node-stats`, [
+        `fields @timestamp, @message`,
+        `parse @message /"index_total":(?<idx_total>\\d+)/ `,
+        `filter ispresent(idx_total)`,
+        `stats max(idx_total) as docs_indexed by bin(1m)`,
+      ]),
+    );
+
+    // Store size (bytes on disk)
+    dashboard.addWidgets(
+      nodeStatsWidget("Parquet — Store Size (bytes)", `${logGroupPrefix}/parquet/node-stats`, [
+        `fields @timestamp, @message`,
+        `parse @message /"size_in_bytes":(?<store_bytes>\\d+)/ `,
+        `filter ispresent(store_bytes)`,
+        `stats max(store_bytes) as store_size by bin(1m)`,
+      ]),
+      nodeStatsWidget("Lucene — Store Size (bytes)", `${logGroupPrefix}/lucene/node-stats`, [
+        `fields @timestamp, @message`,
+        `parse @message /"size_in_bytes":(?<store_bytes>\\d+)/ `,
+        `filter ispresent(store_bytes)`,
+        `stats max(store_bytes) as store_size by bin(1m)`,
+      ]),
+      nodeStatsWidget("ParquetLucene — Store Size (bytes)", `${logGroupPrefix}/parquetLucene/node-stats`, [
+        `fields @timestamp, @message`,
+        `parse @message /"size_in_bytes":(?<store_bytes>\\d+)/ `,
+        `filter ispresent(store_bytes)`,
+        `stats max(store_bytes) as store_size by bin(1m)`,
+      ]),
+    );
+
+    // Search — query total and query time
+    dashboard.addWidgets(
+      nodeStatsWidget("Parquet — Search Queries", `${logGroupPrefix}/parquet/node-stats`, [
+        `fields @timestamp, @message`,
+        `parse @message /"query_total":(?<q_total>\\d+)/ `,
+        `filter ispresent(q_total)`,
+        `stats max(q_total) as query_total by bin(1m)`,
+      ]),
+      nodeStatsWidget("Lucene — Search Queries", `${logGroupPrefix}/lucene/node-stats`, [
+        `fields @timestamp, @message`,
+        `parse @message /"query_total":(?<q_total>\\d+)/ `,
+        `filter ispresent(q_total)`,
+        `stats max(q_total) as query_total by bin(1m)`,
+      ]),
+      nodeStatsWidget("ParquetLucene — Search Queries", `${logGroupPrefix}/parquetLucene/node-stats`, [
+        `fields @timestamp, @message`,
+        `parse @message /"query_total":(?<q_total>\\d+)/ `,
+        `filter ispresent(q_total)`,
+        `stats max(q_total) as query_total by bin(1m)`,
+      ]),
+    );
+
+    // Flush time (cumulative)
+    dashboard.addWidgets(
+      nodeStatsWidget("Parquet — Flush Time (ms)", `${logGroupPrefix}/parquet/node-stats`, [
+        `fields @timestamp, @message`,
+        `parse @message /"flush":\\{"total":\\d+,"periodic":\\d+,"total_time_in_millis":(?<flush_ms>\\d+)/ `,
+        `filter ispresent(flush_ms)`,
+        `stats max(flush_ms) as flush_time_ms by bin(1m)`,
+      ]),
+      nodeStatsWidget("Lucene — Flush Time (ms)", `${logGroupPrefix}/lucene/node-stats`, [
+        `fields @timestamp, @message`,
+        `parse @message /"flush":\\{"total":\\d+,"periodic":\\d+,"total_time_in_millis":(?<flush_ms>\\d+)/ `,
+        `filter ispresent(flush_ms)`,
+        `stats max(flush_ms) as flush_time_ms by bin(1m)`,
+      ]),
+      nodeStatsWidget("ParquetLucene — Flush Time (ms)", `${logGroupPrefix}/parquetLucene/node-stats`, [
+        `fields @timestamp, @message`,
+        `parse @message /"flush":\\{"total":\\d+,"periodic":\\d+,"total_time_in_millis":(?<flush_ms>\\d+)/ `,
+        `filter ispresent(flush_ms)`,
+        `stats max(flush_ms) as flush_time_ms by bin(1m)`,
+      ]),
+    );
+
+    // Native/Virtual memory (includes Rust allocations + mmap)
+    dashboard.addWidgets(
+      nodeStatsWidget("Parquet — Process Virtual Mem (bytes)", `${logGroupPrefix}/parquet/node-stats`, [
+        `fields @timestamp, @message`,
+        `parse @message /"total_virtual_in_bytes":(?<virt_bytes>\\d+)/ `,
+        `filter ispresent(virt_bytes)`,
+        `stats max(virt_bytes) as virtual_mem by bin(1m)`,
+      ]),
+      nodeStatsWidget("Lucene — Process Virtual Mem (bytes)", `${logGroupPrefix}/lucene/node-stats`, [
+        `fields @timestamp, @message`,
+        `parse @message /"total_virtual_in_bytes":(?<virt_bytes>\\d+)/ `,
+        `filter ispresent(virt_bytes)`,
+        `stats max(virt_bytes) as virtual_mem by bin(1m)`,
+      ]),
+      nodeStatsWidget("ParquetLucene — Process Virtual Mem (bytes)", `${logGroupPrefix}/parquetLucene/node-stats`, [
+        `fields @timestamp, @message`,
+        `parse @message /"total_virtual_in_bytes":(?<virt_bytes>\\d+)/ `,
+        `filter ispresent(virt_bytes)`,
+        `stats max(virt_bytes) as virtual_mem by bin(1m)`,
+      ]),
+    );
+
+    // MMap'd buffers (Lucene segment files mapped into memory)
+    dashboard.addWidgets(
+      nodeStatsWidget("Parquet — MMap Buffers (bytes)", `${logGroupPrefix}/parquet/node-stats`, [
+        `fields @timestamp, @message`,
+        `parse @message /"mapped":\\{"count":\\d+,"used_in_bytes":(?<mmap_bytes>\\d+)/ `,
+        `filter ispresent(mmap_bytes)`,
+        `stats max(mmap_bytes) as mmap_used by bin(1m)`,
+      ]),
+      nodeStatsWidget("Lucene — MMap Buffers (bytes)", `${logGroupPrefix}/lucene/node-stats`, [
+        `fields @timestamp, @message`,
+        `parse @message /"mapped":\\{"count":\\d+,"used_in_bytes":(?<mmap_bytes>\\d+)/ `,
+        `filter ispresent(mmap_bytes)`,
+        `stats max(mmap_bytes) as mmap_used by bin(1m)`,
+      ]),
+      nodeStatsWidget("ParquetLucene — MMap Buffers (bytes)", `${logGroupPrefix}/parquetLucene/node-stats`, [
+        `fields @timestamp, @message`,
+        `parse @message /"mapped":\\{"count":\\d+,"used_in_bytes":(?<mmap_bytes>\\d+)/ `,
+        `filter ispresent(mmap_bytes)`,
+        `stats max(mmap_bytes) as mmap_used by bin(1m)`,
+      ]),
     );
 
     new cdk.CfnOutput(this, "CloudWatchDashboard", {

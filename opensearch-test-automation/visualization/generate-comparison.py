@@ -138,18 +138,12 @@ def generate_html(engines, run_id, output_path):
 
     # --- Winner annotations for chart 1 ---
     winner_annotations = []
-    for i, entry in enumerate(query_data):
-        if entry['winner']:
-            # Find the winner's p50 value for annotation placement
-            winner_p50 = entry['engines'][entry['winner']]['p50']
-            winner_annotations.append({
-                'x': entry['query'],
-                'y': winner_p50,
-                'text': '🏆',
-                'showarrow': False,
-                'yshift': 15,
-                'font': {'size': 14},
-            })
+
+    # --- Indexing throughput (index-append task) ---
+    indexing_throughput = {}
+    for eng_name, eng in engines.items():
+        tp = get_metric(eng['data'], 'Mean Throughput', 'index-append')
+        indexing_throughput[eng_name] = round(tp, 1) if tp is not None else 0
 
     # --- Chart 2: Throughput grouped bar ---
     chart2_labels = [e['query'] for e in query_data if any(
@@ -177,7 +171,7 @@ def generate_html(engines, run_id, output_path):
             if not v['passed']:
                 cols += '<td class="fail">FAIL</td>'
             elif entry['winner'] == eng_name:
-                cols += f'<td class="winner">{v["p50"]:.2f} ms 🏆</td>'
+                cols += f'<td class="winner">{v["p50"]:.2f} ms</td>'
             else:
                 cols += f'<td class="pass">{v["p50"]:.2f} ms</td>'
         table_rows += f"<tr><td class='query'>{entry['query']}</td>{cols}</tr>\n"
@@ -207,7 +201,7 @@ def generate_html(engines, run_id, output_path):
   <div class="card">
     <h3 style="color:{color}">{name}</h3>
     <div class="value">{pass_counts[name]} / {total_queries} pass</div>
-    <div class="note">{win_counts[name]} wins (fastest p50)</div>
+    <div class="note">Indexing: {indexing_throughput.get(name, 0)} docs/s</div>
   </div>"""
 
     html = f"""<!DOCTYPE html>
@@ -244,6 +238,7 @@ def generate_html(engines, run_id, output_path):
 {cards_html}
 </div>
 
+<div class="chart" id="chart0"></div>
 <div class="chart" id="chart1"></div>
 <div class="chart" id="chart2"></div>
 
@@ -258,10 +253,27 @@ def generate_html(engines, run_id, output_path):
 </div>
 
 <script>
-// Chart 1: P50 Service Time per Query — grouped bar, winner marked with trophy
+// Chart 0: Indexing Throughput (index-append)
+Plotly.newPlot('chart0', [{{
+  x: {js_array(engine_names)},
+  y: {js_array([indexing_throughput.get(n, 0) for n in engine_names])},
+  type: 'bar',
+  marker: {{color: {js_array([engines[n]['color'] for n in engine_names])}}},
+  text: {js_array([f"{indexing_throughput.get(n, 0)} docs/s" for n in engine_names])},
+  textposition: 'outside',
+  hovertemplate: '%{{x}}: %{{y:.1f}} docs/s<extra></extra>'
+}}], {{
+  title: 'Indexing Throughput (docs/sec) — Higher is Better',
+  yaxis: {{title: 'docs/sec'}},
+  height: 350,
+  margin: {{t: 60, b: 40}},
+  showlegend: false
+}});
+
+// Chart 1: P50 Service Time per Query — grouped bar
 Plotly.newPlot('chart1', [
 {chart1_js_traces}], {{
-  title: 'P50 Service Time per Query (ms) — Lower is Better<br><sub>🏆 = fastest engine for that query. Missing bar = query errored on that engine.</sub>',
+  title: 'P50 Service Time per Query (ms) — Lower is Better<br><sub>Missing bar = query errored on that engine.</sub>',
   barmode: 'group',
   xaxis: {{tickangle: -45, tickfont: {{size: 10}}}},
   yaxis: {{title: 'Service Time (ms)'}},
